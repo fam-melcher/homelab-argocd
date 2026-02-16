@@ -175,9 +175,9 @@ Refer to:
 
 ## License
 
-[Add your license here]
+GNU General Public License v3.0 - This project is open source and available under the GPLv3 License. See [LICENSE](LICENSE) file for details.
 
 ---
 
-**Last Updated:** February 2026
-**Maintained by:** [Your Team/Name]
+**Last Updated:** February 2026  
+**Maintained by:** Michael Melcher
