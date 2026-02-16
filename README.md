@@ -179,5 +179,5 @@ GNU General Public License v3.0 - This project is open source and available unde
 
 ---
 
-**Last Updated:** February 2026  
+**Last Updated:** February 2026
 **Maintained by:** Michael Melcher
