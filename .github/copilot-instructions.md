@@ -546,19 +546,34 @@ This section documents things we learn about the project that should influence f
 
 ### Things We Know Work Well
 
-- (To be filled in as project matures)
+- Kustomize patches for modular configuration (patchesStrategicMerge)
+- Explicit file paths in git commits prevent accidental commits
+- Feature branches with descriptive names keep work organized
+- Configurable image tags via Kustomize `images` field
 
 ### Gotchas and Lessons Learned
 
-- (To be filled in as we encounter issues)
+- **Never use `git add .`** - Always specify explicit file paths to avoid accidentally committing unwanted files (secrets, temp files, IDE configs)
+- **Always read current file contents first** - When context indicates "Some edits were made between the last request and now", read files with `read_file` BEFORE making changes
+- **New changes need explicit handling** - When external tools or users modify files, acknowledge the changes and commit them with descriptive messages
+- **Use `git switch` over `git checkout`** - Modern, explicit standard for branch operations (Git 2.23+)
 
 ### Patterns to Follow
 
-- (Best practices discovered through development)
+- Use Kustomize `patchesStrategicMerge` for modular changes to deployments
+- Use Kustomize `images` field for configurable container image tags
+- Always use explicit file paths in git operations (e.g., `git add ./path/to/file`)
+- Follow conventional commits standard with imperative mood
+- Pin all container image versions for reproducibility
+- Create separate files for patches to keep manifests clean
+- Hybrid naming convention: consistent separators (hyphens OR underscores, not mixed) with exception for component names that naturally contain underscores (e.g., `envoy_gateway`)
 
 ### Patterns to Avoid
 
-- (Anti-patterns we've learned to avoid)
+- Never use `git add .` without explicit file paths
+- Don't mix hyphens and underscores arbitrarily in branch names
+- Don't assume unchanged files - always verify before editing
+- Don't commit directly to main - always use feature branches
 
 ---
 
