@@ -15,4 +15,4 @@ commonLabels:
 # Override by setting a specific tag (e.g., "3.18" for alpine:3.18)
 images:
 - name: alpine
-  newTag: "latest"
+  newTag: "edge"
