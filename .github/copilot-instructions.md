@@ -179,6 +179,10 @@ chore: Update version.            # Period at end
 
 ### Committing Strategy
 
+**⚠️ IMPORTANT: Never use `git add .`**
+
+`git add .` adds ALL changed files indiscriminately, including files we don't want to commit. Always be explicit about which files to add.
+
 **Option 1: Single file in commit**
 
 ```bash
@@ -200,6 +204,20 @@ git commit -m "feat: add envoy gateway deployment" ./bootstrap/envoy-gateway/dep
 # Second commit (separate message)
 git commit -m "feat: add envoy gateway rbac" ./bootstrap/envoy-gateway/rbac.yaml
 ```
+
+**Option 4: Stage specific directory**
+
+```bash
+git add bootstrap/test/
+git commit -m "feat: add test deployment"
+```
+
+**Best Practices:**
+
+- Always review `git status` before committing
+- Only add files intentionally meant for the repo
+- Be explicit about file paths
+- Avoid secrets, temp files, IDE configs getting committed
 
 **⚠️ NEVER commit to main directly. Always use branches.**
 
