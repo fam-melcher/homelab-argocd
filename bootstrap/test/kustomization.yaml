@@ -11,8 +11,12 @@ commonLabels:
   managed-by: argocd
 
 # Configurable alpine image tag
-# Default: latest
+# Default: edge
 # Override by setting a specific tag (e.g., "3.18" for alpine:3.18)
 images:
 - name: alpine
   newTag: "edge"
+
+# Patch: Add htop installation via postStart lifecycle hook
+patchesStrategicMerge:
+- alpine-deployment-patch.yaml
