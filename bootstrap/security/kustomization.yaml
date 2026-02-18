@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Pod security configuration via Kairos NodeOp
+# Deploys k3s admission plugin config to control plane nodes
+resources:
+- k3s-pod-security-nodeop.yaml
+
+commonLabels:
+  managed-by: argocd
+  component: security

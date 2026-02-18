@@ -3,4 +3,5 @@ kind: Kustomization
 
 # Bootstrap components applied in order
 # Add components as they are created with their own kustomization.yaml
-resources: []
+resources:
+- bootstrap/security/
