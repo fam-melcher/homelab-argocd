@@ -3,7 +3,9 @@ kind: Kustomization
 
 # Bootstrap components applied in order
 # CRDs must be applied first, then components that depend on them
-# Kairos operator is deployed separately via argocd/kairos-operator-application.yaml
 resources:
-- bootstrap/crds/
-- bootstrap/security/
+- crds/
+- security/
+
+commonLabels:
+  managed-by: argocd
