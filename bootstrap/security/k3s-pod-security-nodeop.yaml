@@ -1,0 +1,77 @@
+apiVersion: operator.kairos.io/v1alpha1
+kind: NodeOp
+metadata:
+  name: configure-pod-security-policy
+  namespace: default
+spec:
+  # Target all control plane nodes (where k3s API server runs)
+  nodeSelector:
+    matchLabels:
+      node-role.kubernetes.io/control-plane: ""
+
+  # Use Kairos Ubuntu image to access node filesystem
+  image: quay.io/kairos/ubuntu
+
+  # Commands to configure k3s pod security admission plugin
+  command:
+  - sh
+  - -c
+  - |
+    set -e
+
+    # Create k3s config directory if it doesn't exist
+    mkdir -p /host/etc/rancher/k3s
+
+    # Create k3s config file with admission plugin settings
+    cat > /host/etc/rancher/k3s/config.yaml << 'EOF'
+    kube-apiserver-arg:
+      - admission-plugins=NodeRestriction,PodSecurity
+      - admission-control-config-file=/etc/rancher/k3s/admission-config.yaml
+    EOF
+
+    # Create admission control configuration for pod security
+    cat > /host/etc/rancher/k3s/admission-config.yaml << 'EOF'
+    apiVersion: apiserver.config.k8s.io/v1
+    kind: AdmissionConfiguration
+    plugins:
+    - name: PodSecurity
+      configuration:
+        apiVersion: pod-security.admission.config.k8s.io/v1beta1
+        kind: PodSecurityAdmissionConfiguration
+        defaults:
+          enforce: "restricted"
+          audit: "restricted"
+          warn: "restricted"
+        exemptions:
+          namespaces:
+          - kube-system
+          - kube-public
+          - kube-node-lease
+          - argocd
+    EOF
+
+    sync
+
+  # Path where the node's root filesystem is mounted
+  hostMountPath: /host
+
+  # Cordon node before operation to prevent scheduling
+  cordon: true
+
+  # Drain options for graceful pod eviction
+  drainOptions:
+    enabled: true
+    force: false
+    gracePeriodSeconds: 30
+    ignoreDaemonSets: true
+    deleteEmptyDirData: false
+    timeoutSeconds: 300
+
+  # Reboot after successful operation
+  rebootOnSuccess: true
+
+  # Only one node at a time
+  concurrency: 1
+
+  # Stop if any node fails
+  stopOnFailure: true
