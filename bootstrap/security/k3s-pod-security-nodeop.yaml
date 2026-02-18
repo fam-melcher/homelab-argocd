@@ -7,7 +7,7 @@ spec:
   # Target all control plane nodes (where k3s API server runs)
   nodeSelector:
     matchLabels:
-      node-role.kubernetes.io/control-plane: ""
+      node-role.kubernetes.io/control-plane: "true"
 
   # Use Kairos Ubuntu image to access node filesystem
   image: quay.io/kairos/ubuntu
@@ -51,7 +51,6 @@ spec:
     EOF
 
     sync
-
   # Path where the node's root filesystem is mounted
   hostMountPath: /host
 
