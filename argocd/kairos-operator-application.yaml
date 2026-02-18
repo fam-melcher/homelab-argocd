@@ -1,0 +1,22 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kairos-operator
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/kairos-io/kairos-operator
+    targetRevision: main
+    path: config/default
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kairos-operator
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+    - CreateNamespace=true
+    - PrunePropagationPolicy=foreground
+    - PruneLast=true

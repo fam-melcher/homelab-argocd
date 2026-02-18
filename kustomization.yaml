@@ -2,8 +2,8 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 # Bootstrap components applied in order
-# CRDs must be applied first, then operator, then components that depend on them
+# CRDs must be applied first, then components that depend on them
+# Kairos operator is deployed separately via argocd/kairos-operator-application.yaml
 resources:
 - bootstrap/crds/
-- bootstrap/operator/
 - bootstrap/security/
