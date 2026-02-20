@@ -29,6 +29,7 @@ spec:
     cat > /host/etc/rancher/k3s/config.yaml <<'EOF'
     kube-apiserver-arg:
       - admission-control-config-file=/etc/rancher/k3s/admission-config.yaml
+      - enable-admission-plugins=NodeRestriction,PodSecurity
     EOF
 
     # Create admission control configuration for pod security
