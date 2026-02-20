@@ -1,0 +1,60 @@
+apiVersion: operator.kairos.io/v1alpha1
+kind: NodeOp
+metadata:
+  name: configure-kube-apiserver
+  namespace: default
+  labels:
+    component: k3s
+    managed-by: argocd
+spec:
+  # Target all control plane nodes (where k3s API server runs)
+  nodeSelector:
+    matchLabels:
+      node-role.kubernetes.io/control-plane: "true"
+
+  # Use Ubuntu image to access node filesystem
+  image: ubuntu:24.04
+
+  # Commands to configure k3s API server settings
+  command:
+  - sh
+  - -c
+  - |
+    set -e
+
+    # Create k3s config directory and drop-in folder
+    mkdir -p /host/etc/rancher/k3s/config.yaml.d
+
+    # Create infrastructure configuration file
+    cat > /host/etc/rancher/k3s/config.yaml.d/20-infrastructure.yaml <<'EOF'
+    kube-apiserver-arg:
+      - enable-admission-plugins=NamespaceLifecycle,ResourceQuota
+    disable:
+      - traefik
+      - servicelb
+    EOF
+
+    sync
+  # Path where the node's root filesystem is mounted
+  hostMountPath: /host
+
+  # Cordon node before operation to prevent scheduling
+  cordon: true
+
+  # Drain options for graceful pod eviction
+  drainOptions:
+    enabled: true
+    force: false
+    gracePeriodSeconds: 30
+    ignoreDaemonSets: true
+    deleteEmptyDirData: false
+    timeoutSeconds: 300
+
+  # Reboot after successful operation
+  rebootOnSuccess: true
+
+  # Only one node at a time
+  concurrency: 1
+
+  # Stop if any node fails
+  stopOnFailure: true
