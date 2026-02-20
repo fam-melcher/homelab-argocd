@@ -577,6 +577,45 @@ This section documents things we learn about the project that should influence f
 
 ---
 
+## Critical Workflow Checkpoints for Code Changes
+
+**MANDATORY: For ANY work involving file edits or git operations, follow these steps exactly:**
+
+1. **Verify Branch State (FIRST)**
+   - Before editing: `git branch` to confirm current branch
+   - If not on correct feature branch: `git switch main && git pull && git switch -c <type>/<description>`
+   - State the branch name before proceeding
+
+2. **Read Current File State (ALWAYS)**
+   - Use `read_file` to get the full current contents
+   - Never assume file contents or state
+   - If context says "changes made between requests", this is MANDATORY
+   - Show what you read - state the current state explicitly
+
+3. **Plan Changes Before Acting**
+   - Describe EXACTLY what you will change and WHY
+   - Specify which lines/sections will be modified
+   - Explain the reasoning from project requirements
+
+4. **Make Changes Only After Planning**
+   - Execute the edits
+   - Review what was changed
+
+5. **Verify Before Commit (REQUIRED)**
+   - Run: `git diff` to show all changes
+   - Show the diff output
+   - Confirm the diff matches your planned changes
+   - DO NOT commit if anything unexpected appears
+
+6. **Commit With Full Context**
+   - Exact format: `git commit -m "type: subject line\n\ndetailed explanation\n\nWhy this change was needed" ./path/to/file`
+   - Include the reasoning for the change
+   - Never batch unrelated changes - one logical change per commit
+
+**FAILURE MODE:** If any of these steps are skipped or done out of order, the workflow breaks and the work must be redone correctly. There are no shortcuts.
+
+---
+
 ## Questions for the Future
 
 As the project evolves, these are questions to revisit:
