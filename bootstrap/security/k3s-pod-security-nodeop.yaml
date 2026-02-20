@@ -21,15 +21,14 @@ spec:
   - -c
   - |
     set -e
+    # Create k3s config directory and drop-in folder
+    mkdir -p /host/etc/rancher/k3s/config.yaml.d
 
-    # Create k3s config directory if it doesn't exist
-    mkdir -p /host/etc/rancher/k3s
-
-    # Create k3s config file with admission plugin settings
-    cat > /host/etc/rancher/k3s/config.yaml <<'EOF'
+    # Create security admission plugin configuration file
+    cat > /host/etc/rancher/k3s/config.yaml.d/10-security-admission.yaml <<'EOF'
     kube-apiserver-arg:
+      - enable-admission-plugins=NodeRestriction,PodSecurity,ServiceAccount
       - admission-control-config-file=/etc/rancher/k3s/admission-config.yaml
-      - enable-admission-plugins=NodeRestriction,PodSecurity
     EOF
 
     # Create admission control configuration for pod security
@@ -39,7 +38,7 @@ spec:
     plugins:
     - name: PodSecurity
       configuration:
-        apiVersion: pod-security.admission.config.k8s.io/v1beta1
+        apiVersion: pod-security.admission.config.k8s.io/v1
         kind: PodSecurityAdmissionConfiguration
         defaults:
           enforce: "restricted"
