@@ -12,8 +12,8 @@ spec:
     matchLabels:
       node-role.kubernetes.io/control-plane: "true"
 
-  # Use Kairos Ubuntu image to access node filesystem
-  image: quay.io/kairos/ubuntu
+  # Use Ubuntu image to access node filesystem
+  image: ubuntu:24.04
 
   # Commands to configure k3s pod security admission plugin
   command:
@@ -26,14 +26,14 @@ spec:
     mkdir -p /host/etc/rancher/k3s
 
     # Create k3s config file with admission plugin settings
-    cat > /host/etc/rancher/k3s/config.yaml << 'EOF'
+    cat > /host/etc/rancher/k3s/config.yaml <<'EOF'
     kube-apiserver-arg:
       - admission-plugins=NodeRestriction,PodSecurity
       - admission-control-config-file=/etc/rancher/k3s/admission-config.yaml
     EOF
 
     # Create admission control configuration for pod security
-    cat > /host/etc/rancher/k3s/admission-config.yaml << 'EOF'
+    cat > /host/etc/rancher/k3s/admission-config.yaml <<'EOF'
     apiVersion: apiserver.config.k8s.io/v1
     kind: AdmissionConfiguration
     plugins:
