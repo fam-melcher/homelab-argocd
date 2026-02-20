@@ -3,6 +3,9 @@ kind: NodeOp
 metadata:
   name: configure-pod-security-policy
   namespace: default
+  labels:
+    component: security
+    managed-by: argocd
 spec:
   # Target all control plane nodes (where k3s API server runs)
   nodeSelector:
@@ -24,31 +27,31 @@ spec:
 
     # Create k3s config file with admission plugin settings
     cat > /host/etc/rancher/k3s/config.yaml << 'EOF'
-    kube-apiserver-arg:
-      - admission-plugins=NodeRestriction,PodSecurity
-      - admission-control-config-file=/etc/rancher/k3s/admission-config.yaml
-    EOF
+kube-apiserver-arg:
+  - admission-plugins=NodeRestriction,PodSecurity
+  - admission-control-config-file=/etc/rancher/k3s/admission-config.yaml
+EOF
 
     # Create admission control configuration for pod security
     cat > /host/etc/rancher/k3s/admission-config.yaml << 'EOF'
-    apiVersion: apiserver.config.k8s.io/v1
-    kind: AdmissionConfiguration
-    plugins:
-    - name: PodSecurity
-      configuration:
-        apiVersion: pod-security.admission.config.k8s.io/v1beta1
-        kind: PodSecurityAdmissionConfiguration
-        defaults:
-          enforce: "restricted"
-          audit: "restricted"
-          warn: "restricted"
-        exemptions:
-          namespaces:
-          - kube-system
-          - kube-public
-          - kube-node-lease
-          - argocd
-    EOF
+apiVersion: apiserver.config.k8s.io/v1
+kind: AdmissionConfiguration
+plugins:
+- name: PodSecurity
+  configuration:
+    apiVersion: pod-security.admission.config.k8s.io/v1beta1
+    kind: PodSecurityAdmissionConfiguration
+    defaults:
+      enforce: "restricted"
+      audit: "restricted"
+      warn: "restricted"
+    exemptions:
+      namespaces:
+      - kube-system
+      - kube-public
+      - kube-node-lease
+      - argocd
+EOF
 
     sync
   # Path where the node's root filesystem is mounted
