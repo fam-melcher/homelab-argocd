@@ -3,6 +3,9 @@ kind: NodeOp
 metadata:
   name: configure-pod-security-policy
   namespace: default
+  labels:
+    component: security
+    managed-by: argocd
 spec:
   # Target all control plane nodes (where k3s API server runs)
   nodeSelector:
