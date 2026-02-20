@@ -583,7 +583,7 @@ This section documents things we learn about the project that should influence f
 
 1. **Verify Branch State (FIRST)**
    - Before editing: `git branch` to confirm current branch
-   - If not on correct feature branch: `git switch main && git pull && git switch -c <type>/<description>`
+   - If not on correct feature branch: `git switch main && git pull origin main && git switch -c <type>/<description>`
    - State the branch name before proceeding
 
 2. **Read Current File State (ALWAYS)**
