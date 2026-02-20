@@ -608,7 +608,14 @@ This section documents things we learn about the project that should influence f
    - DO NOT commit if anything unexpected appears
 
 6. **Commit With Full Context**
-   - Exact format: `git commit -m "type: subject line\n\ndetailed explanation\n\nWhy this change was needed" ./path/to/file`
+   - Exact format: 
+     ```bash
+     git commit -m "type: subject line
+     
+     detailed explanation
+     
+     Why this change was needed" ./path/to/file
+     ```
    - Include the reasoning for the change
    - Never batch unrelated changes - one logical change per commit
 
