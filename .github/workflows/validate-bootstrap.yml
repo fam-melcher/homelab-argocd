@@ -505,6 +505,31 @@ jobs:
 
       - name: Post validation summary to PR
         uses: actions/github-script@v7
+        env:
+          OVERALL_CHECKS: ${{ steps.overall.outputs.overall_checks }}
+
+          YAMLLINT_STATUS: ${{ needs.static-analysis.outputs.yamllint_status }}
+          YAMLLINT_SUMMARY: ${{ needs.static-analysis.outputs.yamllint_summary }}
+          YAMLLINT_ARTIFACT: ${{ needs.static-analysis.outputs.yamllint_artifact }}
+
+          KUBECONFORM_STATUS: ${{ needs.static-analysis.outputs.kubeconform_status }}
+          KUBECONFORM_SUMMARY: ${{ needs.static-analysis.outputs.kubeconform_summary }}
+          KUBECONFORM_ARTIFACT: ${{ needs.static-analysis.outputs.kubeconform_artifact }}
+
+          KUSTOMIZE_BOOTSTRAP_STATUS: ${{ needs.build-validation.outputs.kustomize_bootstrap_status }}
+          KUSTOMIZE_BOOTSTRAP_SUMMARY: ${{ needs.build-validation.outputs.kustomize_bootstrap_summary }}
+          KUSTOMIZE_BOOTSTRAP_ARTIFACT: ${{ needs.build-validation.outputs.kustomize_bootstrap_artifact }}
+
+          KUSTOMIZE_ARGOCD_STATUS: ${{ needs.build-validation.outputs.kustomize_argocd_status }}
+          KUSTOMIZE_ARGOCD_SUMMARY: ${{ needs.build-validation.outputs.kustomize_argocd_summary }}
+          KUSTOMIZE_ARGOCD_ARTIFACT: ${{ needs.build-validation.outputs.kustomize_argocd_artifact }}
+
+          KUBELINTER_STATUS: ${{ needs.build-validation.outputs.kubelinter_status }}
+          KUBELINTER_SUMMARY: ${{ needs.build-validation.outputs.kubelinter_summary }}
+          KUBELINTER_ARTIFACT: ${{ needs.build-validation.outputs.kubelinter_artifact }}
+
+          CRD_ORDERING_STATUS: ${{ needs.deployment-readiness.outputs.crd_ordering_status }}
+          CRD_ORDERING_SUMMARY: ${{ needs.deployment-readiness.outputs.crd_ordering_summary }}
         with:
           github-token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
           script: |
@@ -522,6 +547,7 @@ jobs:
             function section(title, st, summary, artifactName) {
               const s = (st || "SKIPPED").trim();
               const sum = (summary || "").trim();
+
               const artifactLine = artifactName && artifactName.trim()
                 ? `\n\nFull output: artifact \`${artifactName}\` (see run ${runUrl()})`
                 : `\n\nSee run logs: ${runUrl()}`;
@@ -531,55 +557,27 @@ jobs:
                 artifactLine;
             }
 
-            const overallChecks = `${{ steps.overall.outputs.overall_checks }}` || "SKIPPED";
+            const e = process.env;
+
+            const overallChecks = (e.OVERALL_CHECKS || "SKIPPED").trim();
 
             let report = "# CI Pipeline Validation Report\n\n";
             report += "## Merge Status (computed from checks): " + badge(overallChecks) + "\n";
             report += "This matches whether the PR is merge-blocked by this workflow.\n";
 
             report += "\n### Layer 1: Static Analysis";
-            report += section(
-              "Yamllint (changed files)",
-              `${{ needs.static-analysis.outputs.yamllint_status }}`,
-              `${{ needs.static-analysis.outputs.yamllint_summary }}`,
-              `${{ needs.static-analysis.outputs.yamllint_artifact }}`
-            );
-            report += section(
-              "Kubeconform (changed files)",
-              `${{ needs.static-analysis.outputs.kubeconform_status }}`,
-              `${{ needs.static-analysis.outputs.kubeconform_summary }}`,
-              `${{ needs.static-analysis.outputs.kubeconform_artifact }}`
-            );
+            report += section("Yamllint (changed files)", e.YAMLLINT_STATUS, e.YAMLLINT_SUMMARY, e.YAMLLINT_ARTIFACT);
+            report += section("Kubeconform (changed files)", e.KUBECONFORM_STATUS, e.KUBECONFORM_SUMMARY, e.KUBECONFORM_ARTIFACT);
 
             report += "\n### Layer 2: Build & Integration";
-            report += section(
-              "Kustomize build (bootstrap/)",
-              `${{ needs.build-validation.outputs.kustomize_bootstrap_status }}`,
-              `${{ needs.build-validation.outputs.kustomize_bootstrap_summary }}`,
-              `${{ needs.build-validation.outputs.kustomize_bootstrap_artifact }}`
-            );
-            report += section(
-              "Kustomize build (argocd/)",
-              `${{ needs.build-validation.outputs.kustomize_argocd_status }}`,
-              `${{ needs.build-validation.outputs.kustomize_argocd_summary }}`,
-              `${{ needs.build-validation.outputs.kustomize_argocd_artifact }}`
-            );
-            report += section(
-              "kube-linter (rendered manifests)",
-              `${{ needs.build-validation.outputs.kubelinter_status }}`,
-              `${{ needs.build-validation.outputs.kubelinter_summary }}`,
-              `${{ needs.build-validation.outputs.kubelinter_artifact }}`
-            );
+            report += section("Kustomize build (bootstrap/)", e.KUSTOMIZE_BOOTSTRAP_STATUS, e.KUSTOMIZE_BOOTSTRAP_SUMMARY, e.KUSTOMIZE_BOOTSTRAP_ARTIFACT);
+            report += section("Kustomize build (argocd/)", e.KUSTOMIZE_ARGOCD_STATUS, e.KUSTOMIZE_ARGOCD_SUMMARY, e.KUSTOMIZE_ARGOCD_ARTIFACT);
+            report += section("kube-linter (rendered manifests)", e.KUBELINTER_STATUS, e.KUBELINTER_SUMMARY, e.KUBELINTER_ARTIFACT);
 
             report += "\n### Layer 3: Deployment Readiness";
-            report += section(
-              "CRD ordering",
-              `${{ needs.deployment-readiness.outputs.crd_ordering_status }}`,
-              `${{ needs.deployment-readiness.outputs.crd_ordering_summary }}`,
-              ""
-            );
+            report += section("CRD ordering", e.CRD_ORDERING_STATUS, e.CRD_ORDERING_SUMMARY, "");
 
-            github.rest.issues.createComment({
+            await github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
