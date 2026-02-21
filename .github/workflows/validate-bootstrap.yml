@@ -153,7 +153,7 @@ jobs:
 
           changed_files="${{ steps.changed-files.outputs.changed_files }}"
 
-          # Read newline-delimited changed files into an array
+          # Read newline-delimited changed files into an array (like yamllint)
           mapfile -t all_files <<<"$changed_files"
 
           # Trim whitespace, drop empty lines, exclude kustomization.yaml
@@ -381,6 +381,42 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # NEW: Compute overall status based on the individual check statuses,
+      # so the PR comment matches whether merge is blocked.
+      - name: Compute overall status (checks)
+        id: overall
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          fail=0
+          warn=0
+
+          # Helper: update counters based on a status string
+          consider() {
+            s="${1:-SKIPPED}"
+            if [ "$s" = "FAILED" ]; then
+              fail=1
+            elif [ "$s" = "WARNINGS" ]; then
+              warn=1
+            fi
+          }
+
+          consider "${{ needs.static-analysis.outputs.yamllint_status || 'SKIPPED' }}"
+          consider "${{ needs.static-analysis.outputs.kubeconform_status || 'SKIPPED' }}"
+          consider "${{ needs.build-validation.outputs.kustomize_bootstrap_status || 'SKIPPED' }}"
+          consider "${{ needs.build-validation.outputs.kustomize_argocd_status || 'SKIPPED' }}"
+          consider "${{ needs.deployment-readiness.outputs.crd_ordering_status || 'SKIPPED' }}"
+
+          overall="PASSED"
+          if [ "$fail" -eq 1 ]; then
+            overall="FAILED"
+          elif [ "$warn" -eq 1 ]; then
+            overall="WARNINGS"
+          fi
+
+          echo "overall_checks=$overall" >> "$GITHUB_OUTPUT"
+
       - name: Generate validation report
         id: report
         run: |
@@ -442,17 +478,19 @@ jobs:
                 artifactLine;
             }
 
-            const overall = status(`${{ steps.report.outputs.overall }}`);
+            const overallChecks = `${{ steps.overall.outputs.overall_checks }}` || "SKIPPED";
+
             const layer1 = status(`${{ steps.report.outputs.layer1_status }}`);
             const layer2 = status(`${{ steps.report.outputs.layer2_status }}`);
             const layer3 = status(`${{ steps.report.outputs.layer3_status }}`);
 
             const report = `# CI Pipeline Validation Report
 
-            ## Overall Status: ${overall}
+            ## Merge Status (computed from checks): ${badge(overallChecks)}
+            This matches whether the PR is merge-blocked by this workflow.
 
             ### Layer 1: Static Analysis
-            - Status: ${layer1}` +
+            - Job status: ${layer1}` +
             section(
               "Yamllint (changed files)",
               `${{ needs.static-analysis.outputs.yamllint_status }}`,
@@ -467,7 +505,7 @@ jobs:
             ) + `
 
             ### Layer 2: Build & Integration
-            - Status: ${layer2}` +
+            - Job status: ${layer2}` +
             section(
               "Kustomize build (bootstrap/)",
               `${{ needs.build-validation.outputs.kustomize_bootstrap_status }}`,
@@ -482,7 +520,7 @@ jobs:
             ) + `
 
             ### Layer 3: Deployment Readiness
-            - Status: ${layer3}` +
+            - Job status: ${layer3}` +
             section(
               "CRD ordering",
               `${{ needs.deployment-readiness.outputs.crd_ordering_status }}`,
@@ -498,15 +536,24 @@ jobs:
             });
 
       - name: Check validation results
+        shell: bash
         run: |
-          # Fail if any core job failed OR any individual check is FAILED.
-          if [ "${{ needs.static-analysis.result }}" != "success" ] || \
-             [ "${{ needs.build-validation.result }}" != "success" ] || \
-             [ "${{ needs.deployment-readiness.result }}" != "success" ] || \
-             [ "${{ needs.static-analysis.outputs.yamllint_status }}" = "FAILED" ] || \
-             [ "${{ needs.static-analysis.outputs.kubeconform_status }}" = "FAILED" ] || \
-             [ "${{ needs.build-validation.outputs.kustomize_bootstrap_status }}" = "FAILED" ] || \
-             [ "${{ needs.build-validation.outputs.kustomize_argocd_status }}" = "FAILED" ] || \
-             [ "${{ needs.deployment-readiness.outputs.crd_ordering_status }}" = "FAILED" ]; then
+          set -euo pipefail
+
+          fail=0
+
+          # Fail if any core job failed
+          [ "${{ needs.static-analysis.result }}" != "success" ] && fail=1
+          [ "${{ needs.build-validation.result }}" != "success" ] && fail=1
+          [ "${{ needs.deployment-readiness.result }}" != "success" ] && fail=1
+
+          # Fail if any individual check is explicitly FAILED (WARNINGS do not fail)
+          [ "${{ needs.static-analysis.outputs.yamllint_status || 'SKIPPED' }}" = "FAILED" ] && fail=1
+          [ "${{ needs.static-analysis.outputs.kubeconform_status || 'SKIPPED' }}" = "FAILED" ] && fail=1
+          [ "${{ needs.build-validation.outputs.kustomize_bootstrap_status || 'SKIPPED' }}" = "FAILED" ] && fail=1
+          [ "${{ needs.build-validation.outputs.kustomize_argocd_status || 'SKIPPED' }}" = "FAILED" ] && fail=1
+          [ "${{ needs.deployment-readiness.outputs.crd_ordering_status || 'SKIPPED' }}" = "FAILED" ] && fail=1
+
+          if [ "$fail" -eq 1 ]; then
             exit 1
           fi
