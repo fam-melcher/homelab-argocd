@@ -7,7 +7,6 @@ resources:
   - crds/
   - k3s/
   - security/
-  - alpine-test/
 
 labels:
   - pairs:
