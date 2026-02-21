@@ -8,4 +8,4 @@ spec:
     - name: sleep
       image: alpine:latest
       command: ["sleep", "86400"]
-  # This is a very long comment that definitely exceeds the 120 character limit set in yamllint configuration which should trigger a warning
+      # Long comment removed
