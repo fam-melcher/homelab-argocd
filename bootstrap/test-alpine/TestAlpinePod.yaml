@@ -8,9 +8,9 @@ metadata:
     component: test
 spec:
   containers:
-  - name: alpine
-    image: alpine:latest
-    command: [ "sleep", "86400" ]
+    - name: alpine
+      image: alpine:latest
+      command: ["sleep", "86400"]
     resources:
       requests:
         cpu: 10m
