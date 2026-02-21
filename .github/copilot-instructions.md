@@ -1,652 +1,322 @@
-# GitHub Copilot Instructions
+# GitHub Copilot Agent Instructions (homelab-argocd)
 
-These instructions guide development workflow for the homelab-argocd bootstrap repository. They will evolve as the project matures and needs are better understood.
+These instructions are **for AI coding agents** (VS Code Copilot Agent, GitHub Copilot, etc.).
+They are written as **hard rules + checklists**. Follow them exactly.
 
-## Project Context
+## 0) Project Context (constraints)
 
-**Purpose:** Reproducible Kubernetes cluster bootstrap template using ArgoCD on Kairos OS.
+- **Repository purpose:** Reproducible Kubernetes cluster bootstrap using **ArgoCD** on **Kairos OS**.
+- **Scope:** Infrastructure-layer only (CRDs, storage, networking, gateways). No application deployments.
+- **Delivery model:** Terraform installs ArgoCD → ArgoCD syncs this repo → bootstrap components deploy.
+- **Core principle:** **GitOps**. Git is the single source of truth.
 
-**Scope:** Infrastructure-layer only - CRDs, storage, networking, and API gateways. No application deployments yet.
-
-**Deployment:** Terraform installs ArgoCD → ArgoCD syncs this repository → Bootstrap components deployed.
-
-**Key Principle:** Everything is GitOps. Git is the single source of truth.
+If a request conflicts with GitOps (manual cluster mutation, unpinned versions, etc.), stop and propose a GitOps-compliant alternative.
 
 ---
 
-## Development Workflow
+## 1) 🚨 Safety Gate (OVERRIDES EVERYTHING)
 
-### Before Starting Any Work
+### 1.1 Branch safety (MUST)
 
-1. **Switch to main branch:**
+1. **MUST determine current branch before ANY change** (before editing files, running commands, staging, committing, or pushing):
+   - `git branch --show-current`
+2. **MUST NOT modify files on `main`.**
+   - If current branch is `main`: **STOP** and create/switch to a feature branch first (see §2).
+3. **MUST NOT push to `main`.**
+   - Never run `git push origin main`.
 
-   ```bash
-   git switch main
-   ```
+### 1.2 Staging safety (MUST)
 
-2. **Pull latest changes:**
+- **MUST NOT use bulk staging:**
+  - Never use `git add .`
+  - Never use `git add -A`
+- **MUST stage explicit paths only**, e.g. `git add ./bootstrap/networking/metallb-config.yaml`.
 
-   ```bash
-   git pull origin main
-   ```
+### 1.3 “User tries to force main” rule (MUST)
 
-3. **Create a new branch:**
-   ```bash
-   git checkout -b <type>/<description>
-   ```
+If the user explicitly asks to work directly on `main`, require this confirmation phrase **verbatim**:
 
-### Branch Naming Convention
+**`I CONFIRM DIRECT MAIN CHANGE`**
+
+If the user does not provide it exactly, refuse and proceed with a feature branch workflow.
+
+---
+
+## 2) Standard Workflow (ALWAYS)
+
+When starting work (unless already on a correct feature branch):
+
+1. Ensure local main is current:
+   - `git switch main`
+   - `git pull origin main`
+
+2. Create a new branch:
+   - `git switch -c <type>/<description>`
+
+3. Only then: implement changes.
+
+4. Validate (see §7).
+
+5. Review diff:
+   - `git diff`
+
+6. Commit with explicit paths (see §4).
+
+7. Push feature branch:
+   - `git push -u origin <type>/<description>`
+
+8. Prepare for PR (do not merge directly unless user explicitly asks).
+
+---
+
+## 3) Branch Naming (MUST)
 
 Format: `<type>/<description>`
 
-**Types (Conventional Commits):**
+Allowed `<type>` values:
 
-- `feat` - New feature or component
-- `fix` - Bug fix
-- `chore` - Maintenance, version updates, refactoring
-- `docs` - Documentation only
-- `refactor` - Code restructuring without changing behavior
-- `test` - Tests or test-related changes
-- `ci` - CI/CD changes
+- `feat` `fix` `chore` `docs` `refactor` `test` `ci`
 
-**Description Rules:**
+Description rules:
 
-- Use lowercase
-- Use consistent separators: either hyphens OR underscores (not mixed)
-- Exception: if component name contains underscores naturally (e.g., `envoy_gateway`), that's allowed
-- Be descriptive but concise (3-5 words typical)
-- No trailing slashes or dots
-
-**Examples (using hyphens):**
-
-```bash
-git switch -c feat/add-cert-manager-bootstrap
-git switch -c fix/metallb-ip-pool-config
-git switch -c chore/upgrade-envoy-gateway-v1.5
-git switch -c docs/add-deployment-runbook
-git switch -c refactor/simplify-networkpolicy-structure
-```
-
-**Examples (using underscores):**
-
-```bash
-git switch -c feat/add_cert_manager_bootstrap
-git switch -c fix/metallb_ip_pool_config
-git switch -c chore/upgrade_envoy_gateway_v1_5
-```
-
-**Examples (with component underscores):**
-
-```bash
-git switch -c feat/install-envoy_gateway
-git switch -c chore/update-metallb_config
-```
-
-**Anti-examples (DON'T DO):**
-
-```bash
-# Bad - too vague
-git switch -c feat/update
-
-# Bad - mixing hyphens and underscores without reason
-git switch -c feat/add-cert_manager_bootstrap
-git switch -c chore/update_nginx-to_xyz
-
-# Bad - has trailing slash
-git switch -c feat/add-cert-manager/
-
-# Bad - mixing cases
-git switch -c Feat/Add-Cert-Manager
-```
+- lowercase only
+- choose **one** separator style: hyphens OR underscores (do not mix)
+- exception: component names that naturally use underscores (e.g., `envoy_gateway`) may retain them
+- no trailing `/` or `.`
+- concise but descriptive (typically 3–5 words)
 
 ---
 
-## Commits
+## 4) Commits (MUST)
 
-### Commit Message Format
+### 4.1 Conventional Commits (MUST)
 
-**Single-line commits (if no detailed explanation needed):**
+Format:
 
-```bash
-git commit -m "feat: add cert-manager bootstrap component" ./bootstrap/cert-manager/
+- Subject: `<type>: <subject>`
+- Optional body separated by a blank line
 
-# Or for multiple files with same message:
-git commit -m "docs: update maintenance guide" ./docs/maintenance.md ./README.md
-```
+Rules:
 
-**Multi-line commits (for complex changes):**
+- imperative mood (`add`, `fix`, `upgrade`)
+- do not capitalize first letter after colon
+- no trailing period
+- subject ≤ 50 chars (best effort)
+- body wraps at ~72 chars (best effort)
+- explain **WHAT and WHY**, not HOW
 
-```bash
-git commit -m "feat: add cert-manager bootstrap component
+Allowed commit types:
 
-- Install cert-manager operator
-- Configure ClusterIssuer for Let's Encrypt
-- Add documentation for certificate management
-- Tested on staging cluster successfully
+- `feat:` `fix:` `chore:` `docs:` `refactor:` `test:` `ci:`
 
-Relates to: #42" ./bootstrap/cert-manager/
-```
+### 4.2 Commit execution rules (MUST)
 
-### Conventional Commits Standard
-
-Format: `<type>: <subject>`
-
-**Rules:**
-
-- Use imperative mood ("add" not "adds" or "added")
-- Don't capitalize first letter after colon
-- No period at the end of subject line
-- Max 50 characters for subject line
-- Body separated from subject by blank line
-- Wrap body at 72 characters
-- Explain WHAT and WHY, not HOW
-
-**Commit Types:**
-
-- `feat:` New feature or component
-- `fix:` Bug fix
-- `chore:` Maintenance (version updates, refactoring)
-- `docs:` Documentation changes only
-- `refactor:` Code restructuring
-- `test:` Test additions or changes
-- `ci:` CI/CD configuration
-
-**Good examples:**
-
-```
-feat: add cert-manager to bootstrap components
-
-fix: correct metallb ip pool configuration syntax
-
-chore: upgrade envoy-gateway from v1.2.3 to v1.5.0
-
-docs: add troubleshooting guide for networking issues
-
-refactor: consolidate network policies into single file
-
-test: add validation for kustomize manifests
-```
-
-**Bad examples:**
-
-```
-Updates                           # Too vague
-Added cert-manager                # Wrong mood (added vs add)
-fix: Fix bug in config            # Repeats "fix"
-FEAT: Add something               # Wrong capitalization
-chore: Update version.            # Period at end
-```
-
-### Committing Strategy
-
-**⚠️ IMPORTANT: Never use `git add .`**
-
-`git add .` adds ALL changed files indiscriminately, including files we don't want to commit. Always be explicit about which files to add.
-
-**Option 1: Single file in commit**
-
-```bash
-git commit -m "feat: add postgres storageclass" ./bootstrap/storage/postgres-sc.yaml
-```
-
-**Option 2: Multiple files with same message**
-
-```bash
-git commit -m "docs: update setup guide with troubleshooting section" ./docs/setup.md ./docs/troubleshooting.md
-```
-
-**Option 3: Separate commits for different changes**
-
-```bash
-# First commit
-git commit -m "feat: add envoy gateway deployment" ./bootstrap/envoy-gateway/deployment.yaml
-
-# Second commit (separate message)
-git commit -m "feat: add envoy gateway rbac" ./bootstrap/envoy-gateway/rbac.yaml
-```
-
-**Option 4: Stage specific directory**
-
-```bash
-git add bootstrap/test/
-git commit -m "feat: add test deployment"
-```
-
-**Best Practices:**
-
-- Always review `git status` before committing
-- Only add files intentionally meant for the repo
-- Be explicit about file paths
-- Avoid secrets, temp files, IDE configs getting committed
-
-**⚠️ NEVER commit to main directly. Always use branches.**
+- **Never commit from `main`.**
+- **Never stage everything.**
+- Prefer committing with explicit paths:
+  - `git commit -m "docs: update troubleshooting guide" ./docs/troubleshooting.md`
 
 ---
 
-## Git Commit Examples
+## 5) Repository Structure (GUIDE)
 
-### Example 1: Adding a new bootstrap component
+Key directories:
 
-```bash
-# 1. Create branch
-git switch main && git pull
-git switch -c feat/add-external-secrets-operator
+- `argocd/` — ArgoCD installation resources
+- `bootstrap/` — bootstrap components applied by ArgoCD
+- `docs/` — documentation
 
-# 2. Create files
-mkdir -p bootstrap/external-secrets
-# ... create deployment.yaml, rbac.yaml, etc.
+When adding a new bootstrap component, prefer `bootstrap/<component>/` with:
 
-# 3. Commit with multi-line message for complex changes
-git commit -m "feat: add external-secrets-operator bootstrap
-
-- Install external-secrets-operator helm chart v0.9.0
-- Configure SecretStore and ClusterSecretStore templates
-- Add RBAC for service accounts
-- Documentation in docs/external-secrets.md
-- Tested on staging cluster - no issues
-
-This component enables centralized secret management
-across the cluster." ./bootstrap/external-secrets/
-
-# 4. Push to remote
-git push origin feat/add-external-secrets-operator
-
-# 5. Create PR, get review, merge to main
-```
-
-### Example 2: Fixing a bug
-
-```bash
-# 1. Create branch
-git switch main && git pull
-git switch -c fix/metallb-ipaddresspool-syntax
-
-# 2. Fix the issue
-# ... edit bootstrap/networking/metallb-config.yaml
-
-# 3. Commit with explanation of issue
-git commit -m "fix: correct metallb IPAddressPool naming convention
-
-Previous config used invalid 'addressPools' field.
-Kubernetes Gateway API requires 'address-pools' in ConfigMap.
-
-Error was: 'addressPools' is deprecated, use ConfigMap 'config' key instead" ./bootstrap/networking/metallb-config.yaml
-
-# 4. Push and create PR
-git push origin fix/metallb-ipaddresspool-syntax
-```
-
-### Example 3: Updating component versions
-
-```bash
-# 1. Create branch
-git switch main && git pull
-git switch -c chore/upgrade-argocd-v2.10-to-v2.11
-
-# 2. Update manifests
-# ... update all image references from v2.10 to v2.11
-# ... update CRDs if needed
-
-# 3. Commit with version details
-git commit -m "chore: upgrade argocd from v2.10.0 to v2.11.0
-
-Release: https://github.com/argoproj/argo-cd/releases/tag/v2.11.0
-
-Changes:
-- Updated server deployment image
-- Updated controller deployment image
-- Updated repo-server deployment image
-- No CRD changes required
-- No breaking changes reported
-
-Tested on staging cluster - all components sync correctly" ./argocd/
-
-# 4. Push and create PR
-git push origin chore/upgrade-argocd-v2.10-to-v2.11
-```
-
-### Example 4: Multiple commits for different aspects
-
-```bash
-# For large features, separate logical changes into different commits
-
-git switch main && git pull
-git switch -c feat/add-observability-stack
-
-# Commit 1: Prometheus
-git commit -m "feat: add prometheus monitoring setup" ./bootstrap/monitoring/prometheus/
-
-# Commit 2: Grafana
-git commit -m "feat: add grafana dashboarding" ./bootstrap/monitoring/grafana/
-
-# Commit 3: Documentation
-git commit -m "docs: add observability stack deployment guide" ./docs/observability.md
-
-# All pushed together
-git push origin feat/add-observability-stack
-```
+- `kustomization.yaml`
+- component manifests
+- docs updates when behavior changes
 
 ---
 
-## File Organization
+## 6) Kubernetes / YAML / Kustomize Rules (MUST)
 
-### Structure
+### 6.1 Version pinning (MUST)
 
-```
-homelab-argocd/
-├── argocd/                          # ArgoCD installation
-│   ├── kustomization.yaml
-│   ├── namespace.yaml
-│   ├── argocd-server.yaml
-│   └── argocd-controller.yaml
-├── bootstrap/
-│   ├── crds/                        # Custom Resource Definitions
-│   │   ├── kustomization.yaml
-│   │   ├── gateway-api-crds.yaml
-│   │   └── envoy-gateway-crds.yaml
-│   ├── storage/                     # StorageClasses
-│   │   ├── kustomization.yaml
-│   │   └── default-storageclass.yaml
-│   ├── gateway-api/                 # Gateway API config
-│   │   ├── kustomization.yaml
-│   │   └── gatewayclass.yaml
-│   ├── envoy-gateway/               # Envoy Gateway
-│   │   ├── kustomization.yaml
-│   │   ├── deployment.yaml
-│   │   ├── rbac.yaml
-│   │   └── envoygateway.yaml
-│   └── networking/                  # Networking config
-│       ├── kustomization.yaml
-│       ├── metallb-config.yaml
-│       └── networkpolicies.yaml
-├── docs/
-│   ├── setup.md
-│   ├── architecture.md
-│   ├── troubleshooting.md
-│   └── maintenance.md
-├── ARGOCD_STRATEGIES_GUIDE.md       # Reference (can be moved to docs/ later)
-└── README.md
-```
+- Pin **exact** container image versions.
+- Do NOT use `:latest`, `:v1`, or `:v1.5`.
 
-### File Naming Rules
+### 6.2 Kustomize patterns (SHOULD)
 
-- Use lowercase with hyphens (not underscores)
-- Descriptive names indicating purpose
-- Consistency across components
-
-**Good examples:**
-
-```
-metallb-config.yaml
-networkpolicies.yaml
-envoygateway-default.yaml
-postgres-storageclass.yaml
-```
-
-**Bad examples:**
-
-```
-config.yaml                          # Too generic
-MetallbConfig.yaml                   # Wrong case
-metallb_config.yaml                  # Wrong separator
-```
+- Prefer base/overlays when environment-specific differences exist.
+- Prefer patches files over editing large outputs.
+- Do not manually edit generated resources.
 
 ---
 
-## Code Style & Best Practices
+## 7) Validation & Linting (REQUIRED)
 
-### YAML/Kubernetes Manifests
+### 7.1 When validation is required
 
-1. **Version Pinning:**
+If you change any of:
 
-   ```yaml
-   # ✅ GOOD - exact version
-   image: envoyproxy/envoy-gateway:v1.5.0
+- `.yaml` / `.yml` files
+- kustomize (`kustomization.yaml`, patches, bases/overlays)
+- Kubernetes manifests under `argocd/` or `bootstrap/`
 
-   # ❌ BAD - unpredictable
-   image: envoyproxy/envoy-gateway:latest
-   image: envoyproxy/envoy-gateway:v1.5
-   ```
+…you **MUST** run the validation pipeline below (or explain exactly what you cannot run and why).
 
-2. **Labels and Annotations:**
+### 7.2 Temp file policy (MUST)
 
-   ```yaml
-   metadata:
-     labels:
-       app: envoy-gateway
-       version: v1.5.0
-       managed-by: argocd
-     annotations:
-       description: "Envoy Gateway operator"
-   ```
+- **MUST write temp files inside the repo directory** (do not assume `/tmp` exists).
+- **MUST clean up temp files when done** (even after failures, best effort).
+- Use a dedicated temp directory under the repo, e.g.:
+  - `./.tmp/` (preferred)
+- Temp directory naming:
+  - default: `./.tmp/`
+  - if collision avoidance needed: `./.tmp/agent-validate/`
 
-3. **Resource Limits:**
+### 7.3 Validation pipeline (run in this order)
 
-   ```yaml
-   resources:
-     requests:
-       cpu: 250m
-       memory: 256Mi
-     limits:
-       cpu: 500m
-       memory: 512Mi
-   ```
+#### Step 1: yamllint (MUST use repo config)
 
-4. **Comments for non-obvious choices:**
+- The repo has a `.yamllint` config in the root; use it:
+  - `yamllint -c .yamllint .`
 
-   ```yaml
-   # Why we set this specific replicas count
-   replicas: 3 # High availability, fault tolerance
+#### Step 2: kustomize build (REQUIRED)
 
-   # Version reasoning
-   image: postgres:15-alpine # v15 used, alpine for minimal size
-   ```
+- Render manifests to repo-local temp files:
+  - `mkdir -p ./.tmp`
+  - `kustomize build bootstrap/ > ./.tmp/bootstrap.rendered.yaml`
+- If `argocd/` is also kustomize-managed and changed:
+  - `kustomize build argocd/ > ./.tmp/argocd.rendered.yaml`
 
-### Kustomize
+#### Step 3: kube-linter (MUST lint the rendered output)
 
-1. **Base + Overlays pattern:**
+- **Do not lint the raw directories**; lint the rendered YAML:
+  - `kube-linter lint ./.tmp/bootstrap.rendered.yaml`
+  - `kube-linter lint ./.tmp/argocd.rendered.yaml` (if rendered)
 
-   ```
-   component/
-   ├── base/
-   │   ├── kustomization.yaml
-   │   ├── deployment.yaml
-   │   └── service.yaml
-   └── overlays/
-       ├── production/
-       │   ├── kustomization.yaml
-       │   └── patches.yaml
-       └── staging/
-           ├── kustomization.yaml
-           └── patches.yaml
-   ```
+#### Step 4: kubeconform (MUST validate the rendered output)
 
-2. **Validation before commit:**
+- Validate rendered outputs (use strict mode when possible):
+  - `kubeconform -strict -summary ./.tmp/bootstrap.rendered.yaml`
+  - `kubeconform -strict -summary ./.tmp/argocd.rendered.yaml` (if rendered)
 
-   ```bash
-   kustomize build bootstrap/ | kubectl apply --dry-run=client -f -
-   ```
+#### Step 5: cleanup (REQUIRED)
 
-3. **Never manually edit generated resources**
+- Remove temp artifacts created by validation:
+  - `rm -rf ./.tmp`
 
-### Documentation
+If running on Windows where `rm` may not exist, tell the user the equivalent:
 
-1. **Every component needs explanation:**
-   - What it does
-   - Why we use it
-   - How to troubleshoot it
+- PowerShell: `Remove-Item -Recurse -Force .\.tmp`
 
-2. **Code comments:**
-   - Explain WHY, not WHAT (code shows what)
-   - Reference links to official docs
-   - Call out version-specific behavior
+### 7.4 If tools are missing: install guidance (MUST)
 
-3. **README files:**
-   - Main README explains the project
-   - Component READMEs explain component purpose
-   - docs/ folder has detailed guides
+If any required tool is not available (`yamllint`, `kustomize`, `kube-linter`, `kubeconform`), you must:
 
----
+1. tell the user which tool(s) are missing, and
+2. provide install commands **for their OS**, preferring system package managers **if the user has admin/root**.
 
-## ArgoCD Best Practices
+**Important:** Do **not** assume the user has admin/root rights.
+Ask (or infer from user message) whether they can use admin/root. If not, provide the no-admin fallback.
 
-### Repo Structure for ArgoCD Sync
+#### macOS (prefer Homebrew if possible)
 
-1. **Clear structure:**
+- Preferred (brew):
+  - `brew install yamllint kustomize kube-linter kubeconform`
+- No-admin fallback (user-local installs):
+  - `pipx install yamllint` (or `python3 -m pip install --user yamllint`)
+  - Download release binaries for `kustomize`, `kube-linter`, `kubeconform` into `~/.local/bin` and add it to PATH.
 
-   ```
-   bootstrap/           # Top level - ArgoCD path
-   ├── crds/           # Applied first
-   ├── storage/
-   ├── networking/
-   └── envoy-gateway/
-   ```
+#### Windows (prefer winget if possible)
 
-2. **Dependencies handled by:**
-   - Folder ordering (CRDs before operators)
-   - syncPolicy in ArgoCD Application
-   - Explicit namespace creation
+- Preferred (winget):
+  - `winget install --id Kubernetes.kubectl` (if needed for related workflows)
+  - `winget install --id Kubernetes.kustomize`
+  - For `kubeconform` / `kube-linter` / `yamllint`, if winget packages exist in the user’s environment, use them.
+- No-admin fallback (user-local installs):
+  - Create `%USERPROFILE%\bin` and add it to user PATH.
+  - Download `.exe` releases for `kustomize`, `kube-linter`, `kubeconform` into `%USERPROFILE%\bin`.
+  - `pipx install yamllint` (recommended) or `py -m pip install --user yamllint`.
 
-3. **No manual kubectl:**
-   - All changes through Git + ArgoCD
-   - ArgoCD is source of truth
-   - Cluster state ← Git state
+#### Linux (prefer distro packages if possible)
 
-### When to Update This Repository
+- Preferred (admin/root available):
+  - Debian/Ubuntu: `sudo apt install yamllint` (+ install other tools via distro packages if available)
+  - openSUSE: `sudo zypper in yamllint`
+  - Alpine: `sudo apk add yamllint`
+  - For `kustomize`, `kube-linter`, `kubeconform`: use distro packages if present; otherwise use release binaries.
+- No-admin fallback (user-local installs):
+  - `pipx install yamllint` (or `python3 -m pip install --user yamllint`)
+  - Download release binaries for `kustomize`, `kube-linter`, `kubeconform` into `~/.local/bin` and add it to PATH.
 
-- ✅ Adding new bootstrap components
-- ✅ Updating component versions
-- ✅ Fixing configuration bugs
-- ✅ Adding documentation
-- ✅ Refactoring for clarity
-- ❌ Don't use for storing application configs (that's separate)
+**User-local binary install pattern (no admin, cross-platform idea)**
+
+- Use a per-user bin dir and PATH update:
+  - macOS/Linux: `~/.local/bin`
+  - Windows: `%USERPROFILE%\bin`
+- Download the correct release for OS/arch and place the executable in that directory.
+
+### 7.5 If validation can’t be run (MUST)
+
+If you cannot run validations (missing tools, no local environment, etc.), you must:
+
+- state exactly which commands you would run (from §7.3)
+- list which tools are missing
+- provide install steps (from §7.4) tailored to the user’s OS and admin/root constraints
 
 ---
 
-## Workflow Checklist
+## 8) Documentation Rules (MUST when behavior changes)
 
-Before pushing, verify:
+If you add/change a bootstrap component or alter behavior:
 
-- [ ] On a feature branch (not main)
-- [ ] Branch name follows `type/description` format
-- [ ] All manifests have pinned versions
-- [ ] Manifests validate: `kustomize build bootstrap/ | kubectl apply --dry-run=client -f -`
-- [ ] Commit message follows conventional commits
-- [ ] Documentation updated if needed
-- [ ] Tested in staging if infrastructure change
-- [ ] No secrets committed (no passwords, keys, tokens)
-- [ ] Files named with lowercase and hyphens
-- [ ] Ready to create PR
+- Update or add docs describing:
+  - what it does
+  - why it exists
+  - how to troubleshoot
+
+Prefer `docs/` for detailed guides.
 
 ---
 
-## Learning Notes
+## 9) Agent Execution Protocol (MUST)
 
-This section documents things we learn about the project that should influence future development:
+When performing any change request:
 
-### Things We Know Work Well
+1. State current branch (from `git branch --show-current`).
+2. If on `main`, stop and create/switch to feature branch.
+3. Read existing files before editing when you will touch them.
+4. Plan: list the exact files you will change and why.
+5. Make edits.
+6. Review diff (`git diff`).
+7. Run validation pipeline (§7) when applicable.
+8. Commit with explicit paths and Conventional Commit message.
+9. Push feature branch.
 
-- Kustomize patches for modular configuration (patchesStrategicMerge)
-- Explicit file paths in git commits prevent accidental commits
-- Feature branches with descriptive names keep work organized
-- Configurable image tags via Kustomize `images` field
-
-### Gotchas and Lessons Learned
-
-- **Never use `git add .`** - Always specify explicit file paths to avoid accidentally committing unwanted files (secrets, temp files, IDE configs)
-- **Always read current file contents first** - When context indicates "Some edits were made between the last request and now", read files with `read_file` BEFORE making changes
-- **New changes need explicit handling** - When external tools or users modify files, acknowledge the changes and commit them with descriptive messages
-- **Use `git switch` over `git checkout`** - Modern, explicit standard for branch operations (Git 2.23+)
-
-### Patterns to Follow
-
-- Use Kustomize `patchesStrategicMerge` for modular changes to deployments
-- Use Kustomize `images` field for configurable container image tags
-- Always use explicit file paths in git operations (e.g., `git add ./path/to/file`)
-- Follow conventional commits standard with imperative mood
-- Pin all container image versions for reproducibility
-- Create separate files for patches to keep manifests clean
-- Hybrid naming convention: consistent separators (hyphens OR underscores, not mixed) with exception for component names that naturally contain underscores (e.g., `envoy_gateway`)
-
-### Patterns to Avoid
-
-- Never use `git add .` without explicit file paths
-- Don't mix hyphens and underscores arbitrarily in branch names
-- Don't assume unchanged files - always verify before editing
-- Don't commit directly to main - always use feature branches
+If any step cannot be performed, explicitly say which step and why.
 
 ---
 
-## Critical Workflow Checkpoints for Code Changes
+## 10) Hard Prohibitions (MUST NOT)
 
-**MANDATORY: For ANY work involving file edits or git operations, follow these steps exactly:**
-
-1. **Verify Branch State (FIRST)**
-   - Before editing: `git branch` to confirm current branch
-   - If not on correct feature branch: `git switch main && git pull origin main && git switch -c <type>/<description>`
-   - State the branch name before proceeding
-
-2. **Read Current File State (ALWAYS)**
-   - Use `read_file` to get the full current contents
-   - Never assume file contents or state
-   - If context says "changes made between requests", this is MANDATORY
-   - Show what you read - state the current state explicitly
-
-3. **Plan Changes Before Acting**
-   - Describe EXACTLY what you will change and WHY
-   - Specify which lines/sections will be modified
-   - Explain the reasoning from project requirements
-
-4. **Make Changes Only After Planning**
-   - Execute the edits
-   - Review what was changed
-
-5. **Verify Before Commit (REQUIRED)**
-   - Run: `git diff` to show all changes
-   - Show the diff output
-   - Confirm the diff matches your planned changes
-   - DO NOT commit if anything unexpected appears
-
-6. **Commit With Full Context**
-   - Exact format: 
-     ```bash
-     git commit -m "type: subject line
-     
-     detailed explanation
-     
-     Why this change was needed" ./path/to/file
-     ```
-   - Include the reasoning for the change
-   - Never batch unrelated changes - one logical change per commit
-
-**FAILURE MODE:** If any of these steps are skipped or done out of order, the workflow breaks and the work must be redone correctly. There are no shortcuts.
+- MUST NOT commit or push directly to `main` (unless confirmation phrase is provided; even then, prefer PR).
+- MUST NOT use `git add .` or `git add -A`.
+- MUST NOT introduce unpinned image tags.
+- MUST NOT commit secrets (passwords, keys, tokens). If any secret-like value is detected, stop and ask for remediation.
 
 ---
 
-## Questions for the Future
+## 11) Quick Pre-Push Checklist (MUST)
 
-As the project evolves, these are questions to revisit:
+Before pushing:
 
-1. Should we add a Kustomization resource for ArgoCD to use instead of direct path sync?
-2. Should we implement ApplicationSets for multi-environment deployments?
-3. Should we split into multi-repo structure if we exceed 20 bootstrap components?
-4. Should we add a local development environment for testing before deployment?
-5. What observability/monitoring should we add to the bootstrap itself?
-
----
-
-## Getting Help
-
-If unclear about:
-
-1. **Workflow:** Review this file's Development Workflow section
-2. **Git Commands:** Check the Commit Examples section
-3. **Project Structure:** See File Organization section
-4. **Best Practices:** Refer to Best Practices section
-5. **Troubleshooting:** See docs/troubleshooting.md
-
----
-
-**Last Updated:** February 2026
-**Version:** 1.0
-**Status:** Initial setup - will evolve based on actual project needs
+- [ ] Not on `main`
+- [ ] Branch name matches `<type>/<description>`
+- [ ] Versions pinned (no `latest`)
+- [ ] `yamllint -c .yamllint .` run (if YAML changed)
+- [ ] `kustomize build ... > ./.tmp/*.rendered.yaml` run (if kustomize/manifests changed)
+- [ ] `kube-linter lint ./.tmp/*.rendered.yaml` run (rendered manifests)
+- [ ] `kubeconform -strict -summary ./.tmp/*.rendered.yaml` run (rendered manifests)
+- [ ] Temp files cleaned (`rm -rf ./.tmp` or Windows equivalent)
+- [ ] `git diff` reviewed; only intended files changed
+- [ ] Commit message follows Conventional Commits
+- [ ] No secrets included
+- [ ] Docs updated if behavior changed
