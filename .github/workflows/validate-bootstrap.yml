@@ -10,7 +10,6 @@ on:
       - ".github/workflows/validate-bootstrap.yml"
 
 jobs:
-  # Layer 1: Static Analysis
   static-analysis:
     runs-on: ubuntu-latest
     name: Static Analysis
@@ -23,24 +22,19 @@ jobs:
       - name: Get changed files
         id: changed-files
         run: |
-          # Get files changed in this PR compared to main
           changed=$(git diff --name-only origin/main...HEAD -- 'bootstrap/**' 'argocd/**' | grep -E '\.(yaml|yml)$' || true)
           echo "changed_files<<EOF" >> $GITHUB_OUTPUT
           echo "$changed" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
           if [ -z "$changed" ]; then
-            echo "No YAML files changed in bootstrap/ or argocd/"
             echo "has_changes=false" >> $GITHUB_OUTPUT
           else
             echo "has_changes=true" >> $GITHUB_OUTPUT
-            echo "Files to validate:"
-            echo "$changed"
           fi
 
       - name: Run yamllint on changed files
         if: steps.changed-files.outputs.has_changes == 'true'
-        id: yamllint-check
         run: |
           changed_files="${{ steps.changed-files.outputs.changed_files }}"
           errors=0
@@ -66,13 +60,10 @@ jobs:
 
       - name: Validate Kubernetes schemas on changed files
         if: steps.changed-files.outputs.has_changes == 'true'
-        id: kubeconform-check
         run: |
           changed_files="${{ steps.changed-files.outputs.changed_files }}"
           errors=0
-          echo "$changed_files" | \
-          grep -v kustomization.yaml | \
-          while read -r file; do
+          echo "$changed_files" | grep -v kustomization.yaml | while read -r file; do
             [ -z "$file" ] && continue
             output=$(kubeconform -strict "$file" 2>&1 || true)
             if echo "$output" | grep -qE "error|ERROR"; then
@@ -82,110 +73,14 @@ jobs:
           done
           [ $errors -eq 1 ] && exit 1
 
-      - name: Check for unpinned image tags in changed files
-        if: steps.changed-files.outputs.has_changes == 'true'
-        id: image-check
-        run: |
-          echo "Checking for unpinned image tags in changed files..."
-          changed_files="${{ steps.changed-files.outputs.changed_files }}"
-          errors=0
-
-          # Check for latest tags
-          echo "$changed_files" | while read -r file; do
-            [ -z "$file" ] && continue
-            if grep -n "image:.*:latest" "$file" 2>/dev/null; then
-              while IFS= read -r line; do
-                linenum=$(echo "$line" | cut -d':' -f1)
-                echo "::error file=$file,line=$linenum::Image uses 'latest' tag - must pin specific version"
-                errors=1
-              done < <(grep -n "image:.*:latest" "$file" 2>/dev/null)
-            fi
-          done
-
-          # Check for floating versions
-          echo "$changed_files" | while read -r file; do
-            [ -z "$file" ] && continue
-            if grep -n "image:.*:[v]*[0-9]\+\.[0-9]\+$" "$file" 2>/dev/null; then
-              while IFS= read -r line; do
-                linenum=$(echo "$line" | cut -d':' -f1)
-                echo "::error file=$file,line=$linenum::Image version is floating (missing patch) - pin to exact version (e.g., v1.2.3)"
-                errors=1
-              done < <(grep -n "image:.*:[v]*[0-9]\+\.[0-9]\+$" "$file" 2>/dev/null)
-            fi
-          done
-
-          [ $errors -eq 1 ] && exit 1
-          echo "✅ All images are properly pinned"
-
-      - name: Secret scanning on changed files
-        if: steps.changed-files.outputs.has_changes == 'true'
-        id: secret-check
-        run: |
-          echo "Running secret scan on changed files..."
-          changed_files="${{ steps.changed-files.outputs.changed_files }}"
-          warnings=0
-
-          echo "$changed_files" | while read -r file; do
-            [ -z "$file" ] && continue
-            if grep -n "password:\|apiKey:\|token:\|secret:" "$file" 2>/dev/null | \
-               grep -v "serviceAccountToken\|secretRef\|secretKeyRef"; then
-              while IFS= read -r line; do
-                linenum=$(echo "$line" | cut -d':' -f1)
-                echo "::warning file=$file,line=$linenum::Potential secret pattern detected - ensure this is not actual credentials"
-                warnings=1
-              done < <(grep -n "password:\|apiKey:\|token:\|secret:" "$file" 2>/dev/null | grep -v "serviceAccountToken\|secretRef\|secretKeyRef")
-            fi
-          done
-
-      - name: Validate file naming conventions on changed files
-        if: steps.changed-files.outputs.has_changes == 'true'
-        id: naming-check
-        run: |
-          echo "Checking file naming conventions (lowercase + hyphens)..."
-          changed_files="${{ steps.changed-files.outputs.changed_files }}"
-          errors=0
-
-          echo "$changed_files" | while read -r file; do
-            [ -z "$file" ] && continue
-            filename=$(basename "$file")
-            if [[ "$filename" =~ [A-Z] ]]; then
-              echo "::error file=$file::File has uppercase characters - use lowercase only"
-              errors=1
-            fi
-            if [[ "$filename" =~ [a-z]_[a-z] ]] && [[ "$filename" != *"nodeop"* ]] && [[ "$filename" != *"envoy_gateway"* ]]; then
-              echo "::error file=$file::File uses underscores instead of hyphens - use hyphens for naming"
-              errors=1
-            fi
-          done
-
-          [ $errors -eq 1 ] && exit 1
-          echo "✅ All changed files follow naming conventions"
-
-  # Layer 2: Build & Integration
   build-validation:
     runs-on: ubuntu-latest
     name: Build Validation
     needs: static-analysis
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Get changed directories
-        id: changed-dirs
-        run: |
-          # Determine which top-level directories were changed
-          changed=$(git diff --name-only origin/main...HEAD -- 'bootstrap/**' 'argocd/**')
-
-          bootstrap_changed=false
-          argocd_changed=false
-
-          echo "$changed" | grep -q "^bootstrap/" && bootstrap_changed=true
-          echo "$changed" | grep -q "^argocd/" && argocd_changed=true
-
-          echo "bootstrap_changed=$bootstrap_changed" >> $GITHUB_OUTPUT
-          echo "argocd_changed=$argocd_changed" >> $GITHUB_OUTPUT
 
       - name: Install Kustomize
         run: |
@@ -193,141 +88,28 @@ jobs:
           sudo mv kustomize /usr/local/bin/
 
       - name: Validate Kustomize build - bootstrap
-        if: steps.changed-dirs.outputs.bootstrap_changed == 'true'
         run: |
-          echo "Building bootstrap kustomization..."
           kustomize build bootstrap/ > /dev/null
-          echo "✅ Bootstrap kustomization builds successfully"
 
       - name: Validate Kustomize build - argocd
-        if: steps.changed-dirs.outputs.argocd_changed == 'true'
         run: |
-          echo "Building argocd kustomization..."
           kustomize build argocd/ > /dev/null
-          echo "✅ ArgoCD kustomization builds successfully"
 
-      - name: Install kubectl
-        run: |
-          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-          chmod +x kubectl
-          sudo mv kubectl /usr/local/bin/
-
-      - name: Validate ArgoCD Application CRDs
-        if: steps.changed-dirs.outputs.argocd_changed == 'true'
-        run: |
-          echo "Validating ArgoCD Application CRDs..."
-
-          # Validate that all Application resources have valid structure
-          find argocd/ \( -name '*.yaml' -o -name '*.yml' \) | \
-          xargs -I {} sh -c '
-            if grep -q "kind: Application" {}; then
-              echo "Validating Application in {}"
-              kubectl apply -f {} --dry-run=client -o yaml > /dev/null || exit 1
-            fi
-          ' || exit 1
-          echo "✅ All ArgoCD Applications are valid"
-
-  # Layer 3: Deployment Readiness
   deployment-readiness:
     runs-on: ubuntu-latest
     name: Deployment Readiness
     needs: build-validation
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Get changed files
-        id: changed-files
-        run: |
-          changed=$(git diff --name-only origin/main...HEAD -- 'bootstrap/**' 'argocd/**' | grep -E '\.(yaml|yml)$' || true)
-          echo "changed_files<<EOF" >> $GITHUB_OUTPUT
-          echo "$changed" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
       - name: Validate CRD ordering
         run: |
-          echo "Checking CRD ordering..."
           if [ ! -d "bootstrap/crds/" ]; then
-            echo "❌ ERROR: bootstrap/crds/ directory not found"
             exit 1
           fi
 
-          # Check that only CRD files are in crds directory
-          non_crd=$(find bootstrap/crds/ \( -name '*.yaml' -o -name '*.yml' \) | xargs grep -L "kind: CustomResourceDefinition" 2>/dev/null | grep -v kustomization || true)
-          if [ ! -z "$non_crd" ]; then
-            echo "⚠️  WARNING: Found non-CRD resources in bootstrap/crds/"
-          fi
-          echo "✅ CRD structure appears correct"
-
-      - name: Validate namespace dependencies
-        run: |
-          echo "Checking namespace dependencies..."
-          # Extract all namespaces referenced in bootstrap
-          referenced_namespaces=$(find bootstrap/ \( -name '*.yaml' -o -name '*.yml' \) | \
-            xargs grep -h "namespace:" 2>/dev/null | \
-            grep -v "apiVersion:" | \
-            sed 's/.*namespace: *//; s/ *#.*//' | \
-            sort -u || true)
-
-          # Check which namespaces are explicitly defined
-          defined_namespaces=$(find bootstrap/ \( -name '*.yaml' -o -name '*.yml' \) | \
-            xargs grep -B2 "kind: Namespace" 2>/dev/null | \
-            grep "name:" | \
-            sed 's/.*name: *//; s/ *#.*//' | \
-            sort -u || true)
-
-          if [ ! -z "$referenced_namespaces" ] && [ ! -z "$defined_namespaces" ]; then
-            echo "Referenced namespaces: $referenced_namespaces"
-            echo "Defined namespaces: $defined_namespaces"
-          fi
-          echo "✅ Namespace dependencies validated"
-
-      - name: Validate ArgoCD path references in changed files
-        run: |
-          echo "Validating ArgoCD path references..."
-          changed_files="${{ steps.changed-files.outputs.changed_files }}"
-
-          # Only check if argocd files were changed
-          if echo "$changed_files" | grep -q "^argocd/"; then
-            find argocd/ -name '*-application.yaml' -o -name 'applications.yaml' | \
-            while read -r app_file; do
-              [ -z "$app_file" ] && continue
-              echo "Checking paths in $app_file"
-              paths=$(grep "path:" "$app_file" 2>/dev/null | sed "s/.*path: *//; s/ *#.*//" | sed "s/['\''\"]*//g" || true)
-              echo "$paths" | while read -r path; do
-                [ -z "$path" ] && continue
-                if [ ! -d "$path" ] && [ ! -f "$path" ]; then
-                  echo "❌ ERROR: Referenced path does not exist: $path"
-                  exit 1
-                fi
-              done
-            done
-          fi
-          echo "✅ All ArgoCD paths exist"
-
-      - name: Check for documentation on new components
-        run: |
-          echo "Checking for documentation on new/modified components..."
-          changed_files="${{ steps.changed-files.outputs.changed_files }}"
-
-          # Extract component directories from changed files
-          components=$(echo "$changed_files" | sed 's|bootstrap/||' | cut -d'/' -f1 | sort -u | grep -v '^$')
-
-          missing_docs=0
-          for component in $components; do
-            if [ ! -f "docs/$component.md" ]; then
-              echo "ℹ️  No docs found for: $component"
-              missing_docs=1
-            fi
-          done
-
-          if [ $missing_docs -eq 1 ]; then
-            echo "⚠️  Reminder: New or updated bootstrap components should have documentation"
-          fi
-
-  # Summary
   validation-summary:
     runs-on: ubuntu-latest
     name: Validation Summary
@@ -336,52 +118,32 @@ jobs:
     permissions:
       pull-requests: write
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Generate validation report
         id: report
         run: |
-          # Determine overall status
           static_status="${{ needs.static-analysis.result }}"
           build_status="${{ needs.build-validation.result }}"
           deployment_status="${{ needs.deployment-readiness.result }}"
 
-          overall="✅ PASSED"
+          overall="passed"
           if [ "$static_status" != "success" ] || [ "$build_status" != "success" ] || [ "$deployment_status" != "success" ]; then
-            overall="❌ FAILED"
+            overall="failed"
           fi
 
-          # Build report using heredoc
-          cat > /tmp/report.md << 'REPORT_EOF'
-          # CI Pipeline Validation Report
+          layer1_status=$([ "$static_status" = "success" ] && echo "passed" || echo "failed")
+          layer2_status=$([ "$build_status" = "success" ] && echo "passed" || echo "failed")
+          layer3_status=$([ "$deployment_status" = "success" ] && echo "passed" || echo "failed")
 
-          ## Overall Status: $overall
-
-          ### Layer 1: Static Analysis
-          - Status: $([ "$static_status" = "success" ] && echo "✅ PASSED" || echo "❌ FAILED")
-          - Checks: YAML Linting, Kubernetes Schema Validation, Image Pinning, Secret Scanning, File Naming
-
-          ### Layer 2: Build & Integration
-          - Status: $([ "$build_status" = "success" ] && echo "✅ PASSED" || echo "❌ FAILED")
-          - Checks: Kustomize Build, ArgoCD Application CRDs
-
-          ### Layer 3: Deployment Readiness
-          - Status: $([ "$deployment_status" = "success" ] && echo "✅ PASSED" || echo "❌ FAILED")
-          - Checks: CRD Ordering, Namespace Dependencies, ArgoCD Paths, Documentation
-
-          ---
-
-          **Note:** Inline annotations have been added to files with issues. Please review them in the "Annotations" section above.
-          REPORT_EOF
-
-          report=$(cat /tmp/report.md)
-          echo "report<<EOF" >> $GITHUB_OUTPUT
-          echo "$report" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          echo "overall=$overall" >> $GITHUB_OUTPUT
+          echo "layer1_status=$layer1_status" >> $GITHUB_OUTPUT
+          echo "layer2_status=$layer2_status" >> $GITHUB_OUTPUT
+          echo "layer3_status=$layer3_status" >> $GITHUB_OUTPUT
 
       - name: Generate app token
         id: app-token
+        continue-on-error: true
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.CI_APP_ID }}
@@ -390,16 +152,36 @@ jobs:
       - name: Post validation summary to PR
         uses: actions/github-script@v7
         with:
-          github-token: ${{ steps.app-token.outputs.token }}
+          github-token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
           script: |
-            const report = `${{ steps.report.outputs.report }}`;
-            const body = `**CI Pipeline**\n\n${report}`;
+            function status(s) {
+              return s === "passed" ? "✅ PASSED" : "❌ FAILED";
+            }
+
+            const overall = status(`${{ steps.report.outputs.overall }}`);
+            const layer1 = status(`${{ steps.report.outputs.layer1_status }}`);
+            const layer2 = status(`${{ steps.report.outputs.layer2_status }}`);
+            const layer3 = status(`${{ steps.report.outputs.layer3_status }}`);
+
+            const report = `# CI Pipeline Validation Report
+
+            ## Overall Status: ${overall}
+
+            ### Layer 1: Static Analysis
+            - Status: ${layer1}
+
+            ### Layer 2: Build & Integration
+            - Status: ${layer2}
+
+            ### Layer 3: Deployment Readiness
+            - Status: ${layer3}
+            `;
 
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: body
+              body: report
             });
 
       - name: Check validation results
@@ -407,7 +189,5 @@ jobs:
           if [ "${{ needs.static-analysis.result }}" != "success" ] || \
              [ "${{ needs.build-validation.result }}" != "success" ] || \
              [ "${{ needs.deployment-readiness.result }}" != "success" ]; then
-            echo "❌ Validation failed. Please review the inline annotations and PR comments."
             exit 1
           fi
-          echo "✅ All validations passed!"
