@@ -9,4 +9,4 @@ spec:
   containers:
     - name: sleep
       image: alpine:latest
-      command: ["sleep", "93600"]
+      command: ["sleep", "86400"]
