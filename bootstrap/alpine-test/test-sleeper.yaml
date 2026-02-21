@@ -6,7 +6,18 @@ metadata:
   labels:
     app: sleeper
 spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
   containers:
     - name: sleep
-      image: alpine:latest
+      image: alpine:3.19
       command: ["sleep", "86400"]
+      securityContext:
+        readOnlyRootFilesystem: true
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          memory: 64Mi
