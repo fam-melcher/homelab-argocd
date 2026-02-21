@@ -14,10 +14,17 @@ jobs:
     runs-on: ubuntu-latest
     name: Static Analysis
 
-    # Expose yamllint info to the summary job
     outputs:
+      has_changes: ${{ steps.changed-files.outputs.has_changes }}
+      changed_files: ${{ steps.changed-files.outputs.changed_files }}
+
       yamllint_status: ${{ steps.yamllint.outputs.yamllint_status }}
-      yamllint_output: ${{ steps.yamllint.outputs.yamllint_output }}
+      yamllint_summary: ${{ steps.yamllint.outputs.yamllint_summary }}
+      yamllint_artifact: ${{ steps.yamllint.outputs.yamllint_artifact }}
+
+      kubeconform_status: ${{ steps.kubeconform.outputs.kubeconform_status }}
+      kubeconform_summary: ${{ steps.kubeconform.outputs.kubeconform_summary }}
+      kubeconform_artifact: ${{ steps.kubeconform.outputs.kubeconform_artifact }}
 
     steps:
       - name: Checkout code
@@ -29,21 +36,14 @@ jobs:
         id: changed-files
         shell: bash
         env:
-          # For PRs this is the target branch (e.g. main/master); for other events it's empty.
           BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
 
           base="${BASE_REF:-main}"
-          echo "Base branch: $base"
-
-          # Make sure the base branch exists locally as refs/remotes/origin/<base>
           git fetch --no-tags --prune origin "+refs/heads/${base}:refs/remotes/origin/${base}"
-
-          # Sanity check: ensure the ref exists now
           git rev-parse --verify "refs/remotes/origin/${base}" >/dev/null
 
-          # Diff merge-base (good for PRs): origin/<base>...HEAD
           changed="$(
             git diff --name-only --diff-filter=ACMRT "origin/${base}...HEAD" -- \
               'bootstrap/**' \
@@ -51,9 +51,6 @@ jobs:
             | grep -E '\.(ya?ml)$' \
             || true
           )"
-
-          echo "Changed YAML files:"
-          printf '%s\n' "$changed"
 
           {
             echo "changed_files<<EOF"
@@ -79,9 +76,7 @@ jobs:
 
           files_to_lint=()
           for f in "${files[@]}"; do
-            # trim leading whitespace
             f="${f#"${f%%[![:space:]]*}"}"
-            # trim trailing whitespace
             f="${f%"${f##*[![:space:]]}"}"
             [ -n "$f" ] && files_to_lint+=("$f")
           done
@@ -89,25 +84,25 @@ jobs:
           if [ ${#files_to_lint[@]} -eq 0 ]; then
             echo "yamllint_status=SKIPPED" >> "$GITHUB_OUTPUT"
             {
-              echo "yamllint_output<<EOF"
+              echo "yamllint_summary<<EOF"
               echo "No YAML files to lint."
               echo "EOF"
             } >> "$GITHUB_OUTPUT"
+            echo "yamllint_artifact=" >> "$GITHUB_OUTPUT"
+            echo "yamllint_log_path=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          echo "Linting files:"
-          printf '%s\n' "${files_to_lint[@]}"
+          log="$RUNNER_TEMP/yamllint.log"
+          artifact="yamllint-log"
 
-          # Capture raw yamllint output in a parseable format.
-          # Do not rely on exit code for pass/warn/fail classification; classify by content.
           set +e
-          output="$(yamllint -f parsable -c .yamllint "${files_to_lint[@]}" 2>&1)"
+          yamllint -f parsable -c .yamllint "${files_to_lint[@]}" >"$log" 2>&1
           rc=$?
           set -e
 
-          errors_count="$(printf '%s\n' "$output" | grep -c '\[error\]' || true)"
-          warnings_count="$(printf '%s\n' "$output" | grep -c '\[warning\]' || true)"
+          errors_count="$(grep -c '\[error\]' "$log" || true)"
+          warnings_count="$(grep -c '\[warning\]' "$log" || true)"
 
           status="PASSED"
           if [ "$errors_count" -gt 0 ]; then
@@ -115,25 +110,32 @@ jobs:
           elif [ "$warnings_count" -gt 0 ]; then
             status="WARNINGS"
           else
-            # If yamllint exited nonzero but didn't emit the usual markers, treat it as a tool/config failure
-            if [ "$rc" -ne 0 ] && [ -n "$output" ]; then
-              status="FAILED"
-            fi
+            [ "$rc" -ne 0 ] && status="FAILED"
+          fi
+
+          excerpt="$(sed -n '1,80p' "$log")"
+          summary="Errors: ${errors_count}, Warnings: ${warnings_count}"
+          if [ -n "$excerpt" ]; then
+            summary="${summary}\n\n${excerpt}"
           fi
 
           echo "yamllint_status=$status" >> "$GITHUB_OUTPUT"
           {
-            echo "yamllint_output<<EOF"
-            if [ -n "$output" ]; then
-              printf '%s\n' "$output"
-            else
-              echo "No findings."
-            fi
+            echo "yamllint_summary<<EOF"
+            printf '%b\n' "$summary"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
+          echo "yamllint_artifact=$artifact" >> "$GITHUB_OUTPUT"
+          echo "yamllint_log_path=$log" >> "$GITHUB_OUTPUT"
 
-          # Always exit 0 here so the validation-summary job can post a comment even when yamllint fails.
           exit 0
+
+      - name: Upload yamllint log
+        if: steps.changed-files.outputs.has_changes == 'true' && (steps.yamllint.outputs.yamllint_status == 'FAILED' || steps.yamllint.outputs.yamllint_status == 'WARNINGS')
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.yamllint.outputs.yamllint_artifact }}
+          path: ${{ steps.yamllint.outputs.yamllint_log_path }}
 
       - name: Install kubeconform
         if: steps.changed-files.outputs.has_changes == 'true'
@@ -143,25 +145,101 @@ jobs:
           sudo mv kubeconform /usr/local/bin/
 
       - name: Validate Kubernetes schemas on changed files
+        id: kubeconform
         if: steps.changed-files.outputs.has_changes == 'true'
+        shell: bash
         run: |
           set -euo pipefail
+
           changed_files="${{ steps.changed-files.outputs.changed_files }}"
-          errors=0
-          echo "$changed_files" | grep -v kustomization.yaml | while read -r file; do
-            [ -z "$file" ] && continue
-            output=$(kubeconform -strict "$file" 2>&1 || true)
-            if echo "$output" | grep -qE "error|ERROR"; then
-              echo "::error file=$file::Schema Validation: $output"
-              errors=1
+
+          # Read newline-delimited changed files into an array
+          mapfile -t all_files <<<"$changed_files"
+
+          # Trim whitespace, drop empty lines, exclude kustomization.yaml
+          files_to_validate=()
+          for f in "${all_files[@]}"; do
+            f="${f#"${f%%[![:space:]]*}"}"
+            f="${f%"${f##*[![:space:]]}"}"
+            [ -z "$f" ] && continue
+            [[ "$f" == *kustomization.yaml ]] && continue
+            files_to_validate+=("$f")
+          done
+
+          if [ ${#files_to_validate[@]} -eq 0 ]; then
+            echo "kubeconform_status=SKIPPED" >> "$GITHUB_OUTPUT"
+            {
+              echo "kubeconform_summary<<EOF"
+              echo "No YAML files (excluding kustomization.yaml) to validate."
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            echo "kubeconform_artifact=" >> "$GITHUB_OUTPUT"
+            echo "kubeconform_log_path=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          log="$RUNNER_TEMP/kubeconform.log"
+          artifact="kubeconform-log"
+          : > "$log"
+
+          failed=0
+
+          set +e
+          for file in "${files_to_validate[@]}"; do
+            out="$(kubeconform -strict "$file" 2>&1)"
+            rc=$?
+            if [ $rc -ne 0 ]; then
+              failed=1
+              {
+                echo "==> $file"
+                printf '%s\n' "$out"
+                echo
+              } >> "$log"
             fi
           done
-          [ $errors -eq 1 ] && exit 1
+          set -e
+
+          status=$([ $failed -eq 1 ] && echo "FAILED" || echo "PASSED")
+
+          excerpt="$(sed -n '1,120p' "$log" || true)"
+          if [ -z "${excerpt:-}" ]; then
+            summary="No schema validation errors."
+          else
+            summary="Schema validation errors detected:\n\n${excerpt}"
+          fi
+
+          echo "kubeconform_status=$status" >> "$GITHUB_OUTPUT"
+          {
+            echo "kubeconform_summary<<EOF"
+            printf '%b\n' "$summary"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "kubeconform_artifact=$artifact" >> "$GITHUB_OUTPUT"
+          echo "kubeconform_log_path=$log" >> "$GITHUB_OUTPUT"
+
+          exit 0
+
+      - name: Upload kubeconform log
+        if: steps.changed-files.outputs.has_changes == 'true' && steps.kubeconform.outputs.kubeconform_status == 'FAILED'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.kubeconform.outputs.kubeconform_artifact }}
+          path: ${{ steps.kubeconform.outputs.kubeconform_log_path }}
 
   build-validation:
     runs-on: ubuntu-latest
     name: Build Validation
     needs: static-analysis
+
+    outputs:
+      kustomize_bootstrap_status: ${{ steps.kustomize-bootstrap.outputs.kustomize_status }}
+      kustomize_bootstrap_summary: ${{ steps.kustomize-bootstrap.outputs.kustomize_summary }}
+      kustomize_bootstrap_artifact: ${{ steps.kustomize-bootstrap.outputs.kustomize_artifact }}
+
+      kustomize_argocd_status: ${{ steps.kustomize-argocd.outputs.kustomize_status }}
+      kustomize_argocd_summary: ${{ steps.kustomize-argocd.outputs.kustomize_summary }}
+      kustomize_argocd_artifact: ${{ steps.kustomize-argocd.outputs.kustomize_artifact }}
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -173,27 +251,124 @@ jobs:
           sudo mv kustomize /usr/local/bin/
 
       - name: Validate Kustomize build - bootstrap
+        id: kustomize-bootstrap
+        shell: bash
         run: |
-          kustomize build bootstrap/ > /dev/null
+          set -euo pipefail
+
+          log="$RUNNER_TEMP/kustomize-bootstrap.log"
+          artifact="kustomize-bootstrap-log"
+
+          set +e
+          kustomize build bootstrap/ > /dev/null 2>"$log"
+          rc=$?
+          set -e
+
+          status=$([ $rc -eq 0 ] && echo "PASSED" || echo "FAILED")
+
+          excerpt="$(tail -n 120 "$log" 2>/dev/null || true)"
+          if [ -z "${excerpt:-}" ]; then
+            summary="kustomize build bootstrap/ succeeded."
+          else
+            summary="${excerpt}"
+          fi
+
+          echo "kustomize_status=$status" >> "$GITHUB_OUTPUT"
+          {
+            echo "kustomize_summary<<EOF"
+            printf '%s\n' "$summary"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "kustomize_artifact=$artifact" >> "$GITHUB_OUTPUT"
+          echo "kustomize_log_path=$log" >> "$GITHUB_OUTPUT"
+
+          exit 0
+
+      - name: Upload kustomize bootstrap log
+        if: steps.kustomize-bootstrap.outputs.kustomize_status == 'FAILED'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.kustomize-bootstrap.outputs.kustomize_artifact }}
+          path: ${{ steps.kustomize-bootstrap.outputs.kustomize_log_path }}
 
       - name: Validate Kustomize build - argocd
+        id: kustomize-argocd
+        shell: bash
         run: |
-          kustomize build argocd/ > /dev/null
+          set -euo pipefail
+
+          log="$RUNNER_TEMP/kustomize-argocd.log"
+          artifact="kustomize-argocd-log"
+
+          set +e
+          kustomize build argocd/ > /dev/null 2>"$log"
+          rc=$?
+          set -e
+
+          status=$([ $rc -eq 0 ] && echo "PASSED" || echo "FAILED")
+
+          excerpt="$(tail -n 120 "$log" 2>/dev/null || true)"
+          if [ -z "${excerpt:-}" ]; then
+            summary="kustomize build argocd/ succeeded."
+          else
+            summary="${excerpt}"
+          fi
+
+          echo "kustomize_status=$status" >> "$GITHUB_OUTPUT"
+          {
+            echo "kustomize_summary<<EOF"
+            printf '%s\n' "$summary"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "kustomize_artifact=$artifact" >> "$GITHUB_OUTPUT"
+          echo "kustomize_log_path=$log" >> "$GITHUB_OUTPUT"
+
+          exit 0
+
+      - name: Upload kustomize argocd log
+        if: steps.kustomize-argocd.outputs.kustomize_status == 'FAILED'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.kustomize-argocd.outputs.kustomize_artifact }}
+          path: ${{ steps.kustomize-argocd.outputs.kustomize_log_path }}
 
   deployment-readiness:
     runs-on: ubuntu-latest
     name: Deployment Readiness
     needs: build-validation
+
+    outputs:
+      crd_ordering_status: ${{ steps.crd-ordering.outputs.crd_ordering_status }}
+      crd_ordering_summary: ${{ steps.crd-ordering.outputs.crd_ordering_summary }}
+
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Validate CRD ordering
+        id: crd-ordering
+        shell: bash
         run: |
+          set -euo pipefail
+
           if [ ! -d "bootstrap/crds/" ]; then
-            exit 1
+            echo "crd_ordering_status=FAILED" >> "$GITHUB_OUTPUT"
+            {
+              echo "crd_ordering_summary<<EOF"
+              echo "Directory bootstrap/crds/ is missing."
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+
+          echo "crd_ordering_status=PASSED" >> "$GITHUB_OUTPUT"
+          {
+            echo "crd_ordering_summary<<EOF"
+            echo "bootstrap/crds/ exists."
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          exit 0
 
   validation-summary:
     runs-on: ubuntu-latest
@@ -202,6 +377,7 @@ jobs:
     if: always()
     permissions:
       pull-requests: write
+
     steps:
       - uses: actions/checkout@v4
 
@@ -243,11 +419,27 @@ jobs:
               return s === "passed" ? "✅ PASSED" : "❌ FAILED";
             }
 
-            function yamllintBadge(s) {
+            function badge(s) {
               if (s === "FAILED") return "❌ FAILED";
               if (s === "WARNINGS") return "⚠️ WARNINGS";
               if (s === "SKIPPED") return "➖ SKIPPED";
               return "✅ PASSED";
+            }
+
+            function runUrl() {
+              return `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            }
+
+            function section(title, st, summary, artifactName) {
+              const s = (st || "SKIPPED").trim();
+              const sum = (summary || "").trim();
+              const artifactLine = artifactName && artifactName.trim()
+                ? `\n\nFull output: artifact \`${artifactName}\` (see run ${runUrl()})`
+                : `\n\nSee run logs: ${runUrl()}`;
+
+              return `\n\n### ${title}\n- Result: ${badge(s)}\n` +
+                (sum ? `\n\`\`\`\n${summary}\n\`\`\`\n` : `\n_No output._\n`) +
+                artifactLine;
             }
 
             const overall = status(`${{ steps.report.outputs.overall }}`);
@@ -255,28 +447,48 @@ jobs:
             const layer2 = status(`${{ steps.report.outputs.layer2_status }}`);
             const layer3 = status(`${{ steps.report.outputs.layer3_status }}`);
 
-            const yamllintStatus = `${{ needs.static-analysis.outputs.yamllint_status }}` || "SKIPPED";
-            const yamllintOutputRaw = `${{ needs.static-analysis.outputs.yamllint_output }}` || "";
-
-            const yamllintSection =
-              `\n\n### Yamllint (changed files)\n- Result: ${yamllintBadge(yamllintStatus)}\n` +
-              (yamllintOutputRaw.trim()
-                ? `\n\`\`\`\n${yamllintOutputRaw}\n\`\`\`\n`
-                : "\n_No output._\n");
-
             const report = `# CI Pipeline Validation Report
 
             ## Overall Status: ${overall}
 
             ### Layer 1: Static Analysis
-            - Status: ${layer1}${yamllintSection}
+            - Status: ${layer1}` +
+            section(
+              "Yamllint (changed files)",
+              `${{ needs.static-analysis.outputs.yamllint_status }}`,
+              `${{ needs.static-analysis.outputs.yamllint_summary }}`,
+              `${{ needs.static-analysis.outputs.yamllint_artifact }}`
+            ) +
+            section(
+              "Kubeconform (changed files)",
+              `${{ needs.static-analysis.outputs.kubeconform_status }}`,
+              `${{ needs.static-analysis.outputs.kubeconform_summary }}`,
+              `${{ needs.static-analysis.outputs.kubeconform_artifact }}`
+            ) + `
 
             ### Layer 2: Build & Integration
-            - Status: ${layer2}
+            - Status: ${layer2}` +
+            section(
+              "Kustomize build (bootstrap/)",
+              `${{ needs.build-validation.outputs.kustomize_bootstrap_status }}`,
+              `${{ needs.build-validation.outputs.kustomize_bootstrap_summary }}`,
+              `${{ needs.build-validation.outputs.kustomize_bootstrap_artifact }}`
+            ) +
+            section(
+              "Kustomize build (argocd/)",
+              `${{ needs.build-validation.outputs.kustomize_argocd_status }}`,
+              `${{ needs.build-validation.outputs.kustomize_argocd_summary }}`,
+              `${{ needs.build-validation.outputs.kustomize_argocd_artifact }}`
+            ) + `
 
             ### Layer 3: Deployment Readiness
-            - Status: ${layer3}
-            `;
+            - Status: ${layer3}` +
+            section(
+              "CRD ordering",
+              `${{ needs.deployment-readiness.outputs.crd_ordering_status }}`,
+              `${{ needs.deployment-readiness.outputs.crd_ordering_summary }}`,
+              ""
+            );
 
             github.rest.issues.createComment({
               issue_number: context.issue.number,
@@ -287,10 +499,14 @@ jobs:
 
       - name: Check validation results
         run: |
-          # Fail if any core job failed or if yamllint has ERRORS.
+          # Fail if any core job failed OR any individual check is FAILED.
           if [ "${{ needs.static-analysis.result }}" != "success" ] || \
              [ "${{ needs.build-validation.result }}" != "success" ] || \
              [ "${{ needs.deployment-readiness.result }}" != "success" ] || \
-             [ "${{ needs.static-analysis.outputs.yamllint_status }}" = "FAILED" ]; then
+             [ "${{ needs.static-analysis.outputs.yamllint_status }}" = "FAILED" ] || \
+             [ "${{ needs.static-analysis.outputs.kubeconform_status }}" = "FAILED" ] || \
+             [ "${{ needs.build-validation.outputs.kustomize_bootstrap_status }}" = "FAILED" ] || \
+             [ "${{ needs.build-validation.outputs.kustomize_argocd_status }}" = "FAILED" ] || \
+             [ "${{ needs.deployment-readiness.outputs.crd_ordering_status }}" = "FAILED" ]; then
             exit 1
           fi
