@@ -4,9 +4,11 @@ kind: Kustomization
 # Bootstrap components applied in order
 # CRDs must be applied first, then components that depend on them
 resources:
-- crds/
-- k3s/
-- security/
+  - crds/
+  - k3s/
+  - security/
+  - alpine-test/
 
-commonLabels:
-  managed-by: argocd
+labels:
+  - pairs:
+      managed-by: argocd

@@ -3,8 +3,9 @@ kind: Kustomization
 
 # All managed applications
 resources:
-- bootstrap-application.yaml
-- kairos-operator-application.yaml
+  - bootstrap-application.yaml
+  - kairos-operator-application.yaml
 
-commonLabels:
-  managed-by: argocd
+labels:
+  - pairs:
+      managed-by: argocd
