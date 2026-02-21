@@ -3,9 +3,10 @@ kind: Kustomization
 
 # Pod security configuration via Kairos NodeOp
 # Deploys k3s admission plugin config to control plane nodes
-  resources:
-    - k3s-pod-security-nodeop.yaml
+resources:
+  - k3s-pod-security-nodeop.yaml
 
 labels:
-  managed-by: argocd
-  component: security
+  - pairs:
+      managed-by: argocd
+      component: security

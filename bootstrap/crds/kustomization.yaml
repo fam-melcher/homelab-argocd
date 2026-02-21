@@ -3,9 +3,10 @@ kind: Kustomization
 
 # Kairos operator CRDs
 # Must be applied before using NodeOp resources
-  resources:
+resources:
   - nodeop-crd.yaml
 
 labels:
-  managed-by: argocd
-  component: crds
+  - pairs:
+      managed-by: argocd
+      component: crds

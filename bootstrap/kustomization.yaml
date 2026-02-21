@@ -3,10 +3,11 @@ kind: Kustomization
 
 # Bootstrap components applied in order
 # CRDs must be applied first, then components that depend on them
-  resources:
+resources:
   - crds/
   - k3s/
   - security/
 
 labels:
-  managed-by: argocd
+  - pairs:
+      managed-by: argocd
