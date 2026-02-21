@@ -13,6 +13,12 @@ jobs:
   static-analysis:
     runs-on: ubuntu-latest
     name: Static Analysis
+
+    # NEW: expose outputs to downstream jobs (validation-summary)
+    outputs:
+      yamllint_failed: ${{ steps.yamllint.outputs.yamllint_failed }}
+      yamllint_output: ${{ steps.yamllint.outputs.yamllint_output }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -23,7 +29,6 @@ jobs:
         id: changed-files
         shell: bash
         env:
-          # For PRs this is the target branch (e.g. main/master); for other events it's empty.
           BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
@@ -31,14 +36,9 @@ jobs:
           base="${BASE_REF:-main}"
           echo "Base branch: $base"
 
-          # Make sure the base branch exists locally as refs/remotes/origin/<base>
-          # (Don't use the local branch name; always fetch from origin.)
           git fetch --no-tags --prune origin "+refs/heads/${base}:refs/remotes/origin/${base}"
-
-          # Sanity check: ensure the ref exists now
           git rev-parse --verify "refs/remotes/origin/${base}" >/dev/null
 
-          # Diff merge-base (good for PRs): origin/<base>...HEAD
           changed="$(
             git diff --name-only --diff-filter=ACMRT "origin/${base}...HEAD" -- \
               'bootstrap/**' \
@@ -62,34 +62,60 @@ jobs:
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # CHANGED: capture yamllint output and do not fail the job immediately
+      # (so we can always post the output to the PR comment).
       - name: Run yamllint on changed files
+        id: yamllint
         if: steps.changed-files.outputs.has_changes == 'true'
         shell: bash
         run: |
           set -euo pipefail
 
           changed_files="${{ steps.changed-files.outputs.changed_files }}"
-
           mapfile -t files <<<"$changed_files"
 
           files_to_lint=()
           for f in "${files[@]}"; do
-            # trim leading whitespace
             f="${f#"${f%%[![:space:]]*}"}"
-            # trim trailing whitespace
             f="${f%"${f##*[![:space:]]}"}"
             [ -n "$f" ] && files_to_lint+=("$f")
           done
 
           if [ ${#files_to_lint[@]} -eq 0 ]; then
             echo "No YAML files to lint"
+            echo "yamllint_failed=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "yamllint_output<<EOF"
+              echo "No YAML files to lint."
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           echo "Linting files:"
           printf '%s\n' "${files_to_lint[@]}"
 
-          yamllint -c .yamllint "${files_to_lint[@]}"
+          # Capture output + exit code, but do not fail this step yet
+          set +e
+          output="$(yamllint -c .yamllint "${files_to_lint[@]}" 2>&1)"
+          rc=$?
+          set -e
+
+          # Always publish output for downstream comment
+          {
+            echo "yamllint_output<<EOF"
+            printf '%s\n' "$output"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ $rc -ne 0 ]; then
+            echo "yamllint_failed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "yamllint_failed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # IMPORTANT: don't exit nonzero here; let the summary job fail the workflow later
+          exit 0
 
       - name: Install kubeconform
         if: steps.changed-files.outputs.has_changes == 'true'
@@ -203,12 +229,19 @@ jobs:
             const layer2 = status(`${{ steps.report.outputs.layer2_status }}`);
             const layer3 = status(`${{ steps.report.outputs.layer3_status }}`);
 
+            const yamllintFailed = `${{ needs.static-analysis.outputs.yamllint_failed }}` === "true";
+            const yamllintOutputRaw = `${{ needs.static-analysis.outputs.yamllint_output }}` || "";
+            const yamllintOutput = yamllintOutputRaw.trim()
+              ? `\n\n## Yamllint (changed files)\n\`\`\`\n${yamllintOutputRaw}\n\`\`\``
+              : `\n\n## Yamllint (changed files)\nNo output.`;
+
             const report = `# CI Pipeline Validation Report
 
             ## Overall Status: ${overall}
 
             ### Layer 1: Static Analysis
             - Status: ${layer1}
+            - Yamllint: ${yamllintFailed ? "❌ FAILED" : "✅ PASSED"}${yamllintOutput}
 
             ### Layer 2: Build & Integration
             - Status: ${layer2}
@@ -226,8 +259,10 @@ jobs:
 
       - name: Check validation results
         run: |
+          # Fail the workflow if any job failed OR yamllint failed (even though we didn't fail static-analysis early).
           if [ "${{ needs.static-analysis.result }}" != "success" ] || \
              [ "${{ needs.build-validation.result }}" != "success" ] || \
-             [ "${{ needs.deployment-readiness.result }}" != "success" ]; then
+             [ "${{ needs.deployment-readiness.result }}" != "success" ] || \
+             [ "${{ needs.static-analysis.outputs.yamllint_failed }}" = "true" ]; then
             exit 1
           fi
