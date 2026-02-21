@@ -3,6 +3,8 @@ kind: Pod
 metadata:
   name: sleeper
   namespace: alpine-test
+  labels:
+    app: sleeper
 spec:
   containers:
     - name: sleep
