@@ -22,42 +22,50 @@ jobs:
       - name: Get changed files
         id: changed-files
         run: |
-          changed=$(git diff --name-only origin/main...HEAD -- 'bootstrap/**' 'argocd/**' | grep -E '\.(yaml|yml)$' || true)
-          echo "changed_files<<EOF" >> $GITHUB_OUTPUT
-          echo "$changed" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-          if [ -z "$changed" ]; then
+          # Get YAML files changed in this PR
+          git diff --name-only origin/main...HEAD -- 'bootstrap/**' 'argocd/**' | grep -E '\.(yaml|yml)$' > changed_files.txt || true
+      
+          if [ ! -s changed_files.txt ]; then
             echo "has_changes=false" >> $GITHUB_OUTPUT
           else
             echo "has_changes=true" >> $GITHUB_OUTPUT
           fi
+      
+          # Write the list as a multi-line string so we can read it as an array later
+          echo "changed_files<<EOF" >> $GITHUB_OUTPUT
+          cat changed_files.txt >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Run yamllint on changed files
         if: steps.changed-files.outputs.has_changes == 'true'
         run: |
-          changed_files="${{ steps.changed-files.outputs.changed_files }}"
-          errors=0
-          # Convert newline-separated string to array for proper word splitting
-          IFS=$'\n' read -rd '' -a file_array <<<"$changed_files" || true
-
-          # Strip whitespace from each element
-          for i in "${!file_array[@]}"; do
-            file_array[$i]=$(echo "${file_array[$i]}" | xargs)
+          # Read directly into an array
+          mapfile -t changed_files_array <<<"${{ steps.changed-files.outputs.changed_files }}"
+      
+          # Strip whitespace and remove empty lines
+          files_to_lint=()
+          for f in "${changed_files_array[@]}"; do
+            f_clean=$(echo "$f" | xargs)
+            [ -n "$f_clean" ] && files_to_lint+=("$f_clean")
           done
-
+      
+          # Skip if empty
+          [ ${#files_to_lint[@]} -eq 0 ] && echo "No YAML files to lint" && exit 0
+      
           # Run yamllint
-          output=$(yamllint -c .yamllint "${file_array[@]}" 2>&1 || true)
+          errors=0
+          output=$(yamllint -c .yamllint "${files_to_lint[@]}" 2>&1 || true)
           echo "$output"
           if echo "$output" | grep -q "error"; then
             echo "$output" | grep "error" | while read -r line; do
-              file=$(echo "$line" | cut -d':' -f1)
-              linenum=$(echo "$line" | cut -d':' -f2)
-              msg=$(echo "$line" | cut -d':' -f4-)
+              file=$(echo "$line" | cut -d':' -f1 | xargs)
+              linenum=$(echo "$line" | cut -d':' -f2 | xargs)
+              msg=$(echo "$line" | cut -d':' -f4- | xargs)
               echo "::error file=$file,line=$linenum::YAML Lint:$msg"
             done
             errors=1
           fi
+      
           [ $errors -eq 1 ] && exit 1
 
       - name: Install kubeconform
