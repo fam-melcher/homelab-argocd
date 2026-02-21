@@ -38,7 +38,9 @@ jobs:
         run: |
           changed_files="${{ steps.changed-files.outputs.changed_files }}"
           errors=0
-          output=$(yamllint -c .yamllint $changed_files 2>&1 || true)
+          # Convert newline-separated string to array for proper word splitting
+          IFS=$'\n' read -rd '' -a file_array <<<"$changed_files" || true
+          output=$(yamllint -c .yamllint "${file_array[@]}" 2>&1 || true)
           echo "$output"
           if echo "$output" | grep -q "error"; then
             echo "$output" | grep "error" | while read -r line; do
