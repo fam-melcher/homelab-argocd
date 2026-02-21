@@ -19,54 +19,73 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Get changed files
+      - name: Get changed YAML files (vs main)
         id: changed-files
+        shell: bash
         run: |
-          # Get YAML files changed in this PR
-          git diff --name-only origin/main...HEAD -- 'bootstrap/**' 'argocd/**' | grep -E '\.(yaml|yml)$' > changed_files.txt || true
-      
-          if [ ! -s changed_files.txt ]; then
-            echo "has_changes=false" >> $GITHUB_OUTPUT
+          set -euo pipefail
+
+          # Make sure we can diff against origin/main
+          # (Requires actions/checkout@v4 with fetch-depth: 0 OR this fetch)
+          git fetch --no-tags --prune origin main:refs/remotes/origin/main
+
+          # Collect changed YAML files under the paths you care about.
+          # --diff-filter excludes deletions so lint won't try to read removed files.
+          changed="$(
+            git diff --name-only --diff-filter=ACMRT origin/main...HEAD -- \
+              'bootstrap/**' \
+              'argocd/**' \
+            | grep -E '\.(ya?ml)$' \
+            || true
+          )"
+
+          echo "Changed YAML files:"
+          printf '%s\n' "$changed"
+
+          # Expose multiline output for later steps
+          {
+            echo "changed_files<<EOF"
+            printf '%s\n' "$changed"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ -z "$changed" ]; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
           else
-            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
-      
-          # Write the list as a multi-line string so we can read it as an array later
-          echo "changed_files<<EOF" >> $GITHUB_OUTPUT
-          cat changed_files.txt >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Run yamllint on changed files
         if: steps.changed-files.outputs.has_changes == 'true'
+        shell: bash
         run: |
-          # Read directly into an array
-          mapfile -t changed_files_array <<<"${{ steps.changed-files.outputs.changed_files }}"
-      
-          # Strip whitespace and remove empty lines
+          set -euo pipefail
+
+          changed_files="${{ steps.changed-files.outputs.changed_files }}"
+
+          # Convert newline-separated string to array, preserving spaces safely
+          mapfile -t files <<<"$changed_files"
+
+          # Trim whitespace + remove empty lines without using xargs
           files_to_lint=()
-          for f in "${changed_files_array[@]}"; do
-            f_clean=$(echo "$f" | xargs)
-            [ -n "$f_clean" ] && files_to_lint+=("$f_clean")
+          for f in "${files[@]}"; do
+            # trim leading whitespace
+            f="${f#"${f%%[![:space:]]*}"}"
+            # trim trailing whitespace
+            f="${f%"${f##*[![:space:]]}"}"
+            [ -n "$f" ] && files_to_lint+=("$f")
           done
-      
-          # Skip if empty
-          [ ${#files_to_lint[@]} -eq 0 ] && echo "No YAML files to lint" && exit 0
-      
-          # Run yamllint
-          errors=0
-          output=$(yamllint -c .yamllint "${files_to_lint[@]}" 2>&1 || true)
-          echo "$output"
-          if echo "$output" | grep -q "error"; then
-            echo "$output" | grep "error" | while read -r line; do
-              file=$(echo "$line" | cut -d':' -f1 | xargs)
-              linenum=$(echo "$line" | cut -d':' -f2 | xargs)
-              msg=$(echo "$line" | cut -d':' -f4- | xargs)
-              echo "::error file=$file,line=$linenum::YAML Lint:$msg"
-            done
-            errors=1
+
+          if [ ${#files_to_lint[@]} -eq 0 ]; then
+            echo "No YAML files to lint"
+            exit 0
           fi
-      
-          [ $errors -eq 1 ] && exit 1
+
+          echo "Linting files:"
+          printf '%s\n' "${files_to_lint[@]}"
+
+          # Run yamllint. Let its exit code fail the step (no grep-based parsing needed).
+          yamllint -c .yamllint "${files_to_lint[@]}"
 
       - name: Install kubeconform
         if: steps.changed-files.outputs.has_changes == 'true'
