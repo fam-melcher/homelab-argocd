@@ -228,7 +228,7 @@ jobs:
           exit 0
 
       - name: Upload kubeconform log
-        if: always() && steps.changed-files.outputs.has_changes == 'true'
+        if: always() && steps.changed-files.outputs.has_changes == 'true' && steps.kubeconform.outputs.kubeconform_log_path != ''
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.kubeconform.outputs.kubeconform_artifact }}
