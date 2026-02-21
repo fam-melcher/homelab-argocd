@@ -19,20 +19,28 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Get changed YAML files (vs main)
+      - name: Get changed YAML files (vs base branch)
         id: changed-files
         shell: bash
+        env:
+          # For PRs this is the target branch (e.g. main/master); for other events it's empty.
+          BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
 
-          # Make sure we can diff against origin/main
-          # (Requires actions/checkout@v4 with fetch-depth: 0 OR this fetch)
-          git fetch --no-tags --prune origin main:refs/remotes/origin/main
+          base="${BASE_REF:-main}"
+          echo "Base branch: $base"
 
-          # Collect changed YAML files under the paths you care about.
-          # --diff-filter excludes deletions so lint won't try to read removed files.
+          # Make sure the base branch exists locally as refs/remotes/origin/<base>
+          # (Don't use the local branch name; always fetch from origin.)
+          git fetch --no-tags --prune origin "+refs/heads/${base}:refs/remotes/origin/${base}"
+
+          # Sanity check: ensure the ref exists now
+          git rev-parse --verify "refs/remotes/origin/${base}" >/dev/null
+
+          # Diff merge-base (good for PRs): origin/<base>...HEAD
           changed="$(
-            git diff --name-only --diff-filter=ACMRT origin/main...HEAD -- \
+            git diff --name-only --diff-filter=ACMRT "origin/${base}...HEAD" -- \
               'bootstrap/**' \
               'argocd/**' \
             | grep -E '\.(ya?ml)$' \
@@ -42,7 +50,6 @@ jobs:
           echo "Changed YAML files:"
           printf '%s\n' "$changed"
 
-          # Expose multiline output for later steps
           {
             echo "changed_files<<EOF"
             printf '%s\n' "$changed"
@@ -63,10 +70,8 @@ jobs:
 
           changed_files="${{ steps.changed-files.outputs.changed_files }}"
 
-          # Convert newline-separated string to array, preserving spaces safely
           mapfile -t files <<<"$changed_files"
 
-          # Trim whitespace + remove empty lines without using xargs
           files_to_lint=()
           for f in "${files[@]}"; do
             # trim leading whitespace
@@ -84,7 +89,6 @@ jobs:
           echo "Linting files:"
           printf '%s\n' "${files_to_lint[@]}"
 
-          # Run yamllint. Let its exit code fail the step (no grep-based parsing needed).
           yamllint -c .yamllint "${files_to_lint[@]}"
 
       - name: Install kubeconform
