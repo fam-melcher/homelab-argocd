@@ -152,11 +152,8 @@ jobs:
           set -euo pipefail
 
           changed_files="${{ steps.changed-files.outputs.changed_files }}"
-
-          # Read newline-delimited changed files into an array (like yamllint)
           mapfile -t all_files <<<"$changed_files"
 
-          # Trim whitespace, drop empty lines, exclude kustomization.yaml
           files_to_validate=()
           for f in "${all_files[@]}"; do
             f="${f#"${f%%[![:space:]]*}"}"
@@ -239,6 +236,10 @@ jobs:
       kustomize_argocd_status: ${{ steps.kustomize-argocd.outputs.kustomize_status }}
       kustomize_argocd_summary: ${{ steps.kustomize-argocd.outputs.kustomize_summary }}
       kustomize_argocd_artifact: ${{ steps.kustomize-argocd.outputs.kustomize_artifact }}
+
+      kubelinter_status: ${{ steps.kube-linter.outputs.kubelinter_status }}
+      kubelinter_summary: ${{ steps.kube-linter.outputs.kubelinter_summary }}
+      kubelinter_artifact: ${{ steps.kube-linter.outputs.kubelinter_artifact }}
 
     steps:
       - uses: actions/checkout@v4
@@ -332,6 +333,96 @@ jobs:
           name: ${{ steps.kustomize-argocd.outputs.kustomize_artifact }}
           path: ${{ steps.kustomize-argocd.outputs.kustomize_log_path }}
 
+      - name: Install kube-linter
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Pin a version for reproducibility; update as desired.
+          version="0.6.8"
+          curl -sSL -o /tmp/kube-linter.tar.gz "https://github.com/stackrox/kube-linter/releases/download/${version}/kube-linter-linux.tar.gz"
+          tar -C /tmp -xzf /tmp/kube-linter.tar.gz
+          sudo mv /tmp/kube-linter /usr/local/bin/kube-linter
+          kube-linter version
+
+      - name: Run kube-linter on rendered manifests
+        id: kube-linter
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Render both kustomizations to temp files
+          bootstrap_out="$RUNNER_TEMP/rendered-bootstrap.yaml"
+          argocd_out="$RUNNER_TEMP/rendered-argocd.yaml"
+
+          # We expect kustomize build errors to be handled by the earlier steps,
+          # but we still guard here.
+          set +e
+          kustomize build bootstrap/ >"$bootstrap_out" 2>/dev/null
+          rc1=$?
+          kustomize build argocd/ >"$argocd_out" 2>/dev/null
+          rc2=$?
+          set -e
+
+          if [ $rc1 -ne 0 ] || [ $rc2 -ne 0 ]; then
+            echo "kubelinter_status=SKIPPED" >> "$GITHUB_OUTPUT"
+            {
+              echo "kubelinter_summary<<EOF"
+              echo "Skipped: unable to render manifests because kustomize build failed (see kustomize logs)."
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            echo "kubelinter_artifact=" >> "$GITHUB_OUTPUT"
+            echo "kubelinter_log_path=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          log="$RUNNER_TEMP/kube-linter.log"
+          artifact="kube-linter-log"
+
+          set +e
+          kube-linter lint "$bootstrap_out" "$argocd_out" >"$log" 2>&1
+          rc=$?
+          set -e
+
+          # kube-linter uses exit code 1 when it finds lint issues.
+          # We'll classify based on output content to get WARNINGS vs FAILED.
+          errors_count="$(grep -ciE '\berror\b' "$log" || true)"
+          warnings_count="$(grep -ciE '\bwarning\b' "$log" || true)"
+
+          status="PASSED"
+          if [ "$errors_count" -gt 0 ]; then
+            status="FAILED"
+          elif [ "$warnings_count" -gt 0 ]; then
+            status="WARNINGS"
+          else
+            # If it exited nonzero but didn't label anything, treat as tool failure
+            [ "$rc" -ne 0 ] && status="FAILED"
+          fi
+
+          excerpt="$(sed -n '1,120p' "$log" || true)"
+          if [ -z "${excerpt:-}" ]; then
+            summary="No kube-linter findings."
+          else
+            summary="Errors: ${errors_count}, Warnings: ${warnings_count}\n\n${excerpt}"
+          fi
+
+          echo "kubelinter_status=$status" >> "$GITHUB_OUTPUT"
+          {
+            echo "kubelinter_summary<<EOF"
+            printf '%b\n' "$summary"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "kubelinter_artifact=$artifact" >> "$GITHUB_OUTPUT"
+          echo "kubelinter_log_path=$log" >> "$GITHUB_OUTPUT"
+
+          exit 0
+
+      - name: Upload kube-linter log
+        if: steps.kube-linter.outputs.kubelinter_status == 'FAILED' || steps.kube-linter.outputs.kubelinter_status == 'WARNINGS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.kube-linter.outputs.kubelinter_artifact }}
+          path: ${{ steps.kube-linter.outputs.kubelinter_log_path }}
+
   deployment-readiness:
     runs-on: ubuntu-latest
     name: Deployment Readiness
@@ -381,8 +472,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # NEW: Compute overall status based on the individual check statuses,
-      # so the PR comment matches whether merge is blocked.
       - name: Compute overall status (checks)
         id: overall
         shell: bash
@@ -392,7 +481,6 @@ jobs:
           fail=0
           warn=0
 
-          # Helper: update counters based on a status string
           consider() {
             s="${1:-SKIPPED}"
             if [ "$s" = "FAILED" ]; then
@@ -406,6 +494,7 @@ jobs:
           consider "${{ needs.static-analysis.outputs.kubeconform_status || 'SKIPPED' }}"
           consider "${{ needs.build-validation.outputs.kustomize_bootstrap_status || 'SKIPPED' }}"
           consider "${{ needs.build-validation.outputs.kustomize_argocd_status || 'SKIPPED' }}"
+          consider "${{ needs.build-validation.outputs.kubelinter_status || 'SKIPPED' }}"
           consider "${{ needs.deployment-readiness.outputs.crd_ordering_status || 'SKIPPED' }}"
 
           overall="PASSED"
@@ -517,6 +606,12 @@ jobs:
               `${{ needs.build-validation.outputs.kustomize_argocd_status }}`,
               `${{ needs.build-validation.outputs.kustomize_argocd_summary }}`,
               `${{ needs.build-validation.outputs.kustomize_argocd_artifact }}`
+            ) +
+            section(
+              "kube-linter (rendered manifests)",
+              `${{ needs.build-validation.outputs.kubelinter_status }}`,
+              `${{ needs.build-validation.outputs.kubelinter_summary }}`,
+              `${{ needs.build-validation.outputs.kubelinter_artifact }}`
             ) + `
 
             ### Layer 3: Deployment Readiness
@@ -542,16 +637,15 @@ jobs:
 
           fail=0
 
-          # Fail if any core job failed
           [ "${{ needs.static-analysis.result }}" != "success" ] && fail=1
           [ "${{ needs.build-validation.result }}" != "success" ] && fail=1
           [ "${{ needs.deployment-readiness.result }}" != "success" ] && fail=1
 
-          # Fail if any individual check is explicitly FAILED (WARNINGS do not fail)
           [ "${{ needs.static-analysis.outputs.yamllint_status || 'SKIPPED' }}" = "FAILED" ] && fail=1
           [ "${{ needs.static-analysis.outputs.kubeconform_status || 'SKIPPED' }}" = "FAILED" ] && fail=1
           [ "${{ needs.build-validation.outputs.kustomize_bootstrap_status || 'SKIPPED' }}" = "FAILED" ] && fail=1
           [ "${{ needs.build-validation.outputs.kustomize_argocd_status || 'SKIPPED' }}" = "FAILED" ] && fail=1
+          [ "${{ needs.build-validation.outputs.kubelinter_status || 'SKIPPED' }}" = "FAILED" ] && fail=1
           [ "${{ needs.deployment-readiness.outputs.crd_ordering_status || 'SKIPPED' }}" = "FAILED" ] && fail=1
 
           if [ "$fail" -eq 1 ]; then
