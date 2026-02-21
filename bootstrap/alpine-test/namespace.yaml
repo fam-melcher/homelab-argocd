@@ -2,4 +2,3 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: alpine-test
-  # This is a namespace for testing alpine containers and should have a very long descriptive comment that exceeds the 120 character line limit
