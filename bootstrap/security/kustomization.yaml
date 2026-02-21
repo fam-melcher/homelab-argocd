@@ -6,6 +6,6 @@ kind: Kustomization
 resources:
 - k3s-pod-security-nodeop.yaml
 
-commonLabels:
+labels:
   managed-by: argocd
   component: security

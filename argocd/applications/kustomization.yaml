@@ -6,5 +6,5 @@ resources:
 - bootstrap-application.yaml
 - kairos-operator-application.yaml
 
-commonLabels:
+labels:
   managed-by: argocd

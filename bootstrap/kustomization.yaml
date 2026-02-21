@@ -8,5 +8,5 @@ resources:
 - k3s/
 - security/
 
-commonLabels:
+labels:
   managed-by: argocd
