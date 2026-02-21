@@ -40,6 +40,13 @@ jobs:
           errors=0
           # Convert newline-separated string to array for proper word splitting
           IFS=$'\n' read -rd '' -a file_array <<<"$changed_files" || true
+
+          # Strip whitespace from each element
+          for i in "${!file_array[@]}"; do
+            file_array[$i]=$(echo "${file_array[$i]}" | xargs)
+          done
+
+          # Run yamllint
           output=$(yamllint -c .yamllint "${file_array[@]}" 2>&1 || true)
           echo "$output"
           if echo "$output" | grep -q "error"; then
