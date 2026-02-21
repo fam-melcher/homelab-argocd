@@ -4,18 +4,18 @@ This guide walks through setting up your Kairos OS cluster with ArgoCD and boots
 
 ## Prerequisites
 
-- Kairos OS cluster with MetalLB already installed
+- Kairos OS cluster installed and running
 - kubectl configured and authenticated to your cluster
 - Terraform configured to deploy to your cluster
 - Git SSH or HTTPS access configured
-- Docker or container runtime available
+- Access to this repository (fork or clone)
 
 ## Architecture Overview
 
 ```
 ┌─────────────────────────────────────────────┐
 │        Kairos OS Cluster                    │
-│  (MetalLB already installed)                │
+│  (K3s pre-installed)                        │
 └─────────────────────────────────────────────┘
                     ↓
         Terraform Deploy ArgoCD
@@ -31,55 +31,58 @@ This guide walks through setting up your Kairos OS cluster with ArgoCD and boots
                     ↓
 ┌─────────────────────────────────────────────┐
 │   Bootstrap Components (from this repo)     │
-│  - CRDs                                     │
-│  - StorageClasses                           │
-│  - Gateway API                              │
-│  - Envoy Gateway                            │
-│  - Networking policies & MetalLB config     │
+│  - CRDs (Kairos NodeOp)                     │
+│  - K3s Configuration                        │
+│  - Pod Security Configuration               │
 └─────────────────────────────────────────────┘
 ```
 
 ## Step 1: Prepare Terraform
 
-Your Terraform code should:
+Your Terraform code should install ArgoCD to the cluster using Helm:
 
-1. **Install ArgoCD to the cluster:**
+```hcl
+resource "helm_release" "argocd" {
+  name             = "argocd"
+  namespace        = "argocd"
+  create_namespace = true
+  repository       = "https://argoproj.github.io/argo-helm"
+  chart            = "argo-cd"
+  version          = "X.Y.Z"  # Pin to specific version
+}
+```
 
-   ```hcl
-   resource "helm_release" "argocd" {
-     name       = "argocd"
-     repository = "https://argoproj.github.io/argo-helm"
-     chart      = "argo-cd"
-     namespace  = "argocd"
-     create_namespace = true
+## Step 2: Configure ArgoCD to Sync Bootstrap Repository
 
-     values = [file("${path.module}/argocd-values.yaml")]
-   }
-   ```
+Create an ArgoCD Application that points to this repository's bootstrap components:
 
-2. **Create the ArgoCD Application pointing to this repository:**
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: bootstrap
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/fam-melcher/homelab-argocd.git
+    targetRevision: main
+    path: bootstrap
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+```
 
-   ```hcl
-   resource "helm_release" "bootstrap_app" {
-     depends_on = [helm_release.argocd]
+Apply this to your cluster:
 
-     name   = "bootstrap"
-     chart  = "${path.module}/argocd-bootstrap-app"
-     namespace = "argocd"
+```bash
+kubectl apply -f application-bootstrap.yaml
+```
 
-     set {
-       name  = "repository.url"
-       value = "https://github.com/fam-melcher/homelab-argocd.git"
-     }
-
-     set {
-       name  = "repository.targetRevision"
-       value = "main"
-     }
-   }
-   ```
-
-## Step 2: Deploy with Terraform
+## Step 3: Deploy with Terraform
 
 ```bash
 # From your Terraform directory
@@ -95,31 +98,28 @@ terraform apply
 kubectl get pods -n argocd
 ```
 
-## Step 3: Verify ArgoCD Sync
+## Step 4: Verify ArgoCD Sync
 
 ```bash
-# Forward ArgoCD port to access web UI (optional)
-kubectl port-forward -n argocd svc/argocd-server 8080:443
-
-# Then visit: https://localhost:8080
-# Default username: admin
-# Get password: kubectl get secret argocd-initial-admin-secret -n argocd -o jsonpath="{.data.password}" | base64 -d
-
-# Or, check application status via CLI
+# Check application status
 kubectl get applications -n argocd
 kubectl describe application bootstrap -n argocd
-```
 
-## Step 4: Monitor Bootstrap Sync
-
-```bash
 # Watch bootstrap components sync
 kubectl get applications -n argocd -w
+```
 
-# Check specific components
-kubectl get storageclass
-kubectl api-resources | grep gateway
-kubectl get envoygateway -n envoy-gateway-system
+## Step 5: Verify Bootstrap Components
+
+```bash
+# Verify CRDs are installed
+kubectl get crd | grep nodeop
+
+# Check that bootstrap components are deployed
+kubectl get nodes -o wide  # Should show K3s configuration applied
+
+# Verify pod security is enforced
+kubectl get pods -A  # Should show security context applied
 ```
 
 ## Troubleshooting
@@ -128,7 +128,7 @@ kubectl get envoygateway -n envoy-gateway-system
 
 ```bash
 # Check ArgoCD server logs
-kubectl logs -n argocd -l app.kubernetes.io/name=argocd-server
+kubectl logs -n argocd -l app.kubernetes.io/name=argocd-server -f
 
 # Check application details
 kubectl describe application bootstrap -n argocd
@@ -137,30 +137,28 @@ kubectl describe application bootstrap -n argocd
 ### Bootstrap components not appearing
 
 ```bash
-# Check ArgoCD controller logs
-kubectl logs -n argocd -l app.kubernetes.io/name=argocd-application-controller
+# Check ArgoCD application controller logs
+kubectl logs -n argocd -l app.kubernetes.io/name=argocd-application-controller -f
 
-# Check if CRDs are installed
-kubectl get crd | grep gateway
+# Verify CRDs are installed
+kubectl get crd nodeop.kairos.io
 ```
 
-### MetalLB issues
+### K3s configuration not applied
 
 ```bash
-# Verify MetalLB is running
-kubectl get pods -n metallb-system
+# Check K3s node operator logs
+kubectl logs -n kube-system -l app=k3s-node-operator -f
 
-# Check MetalLB configuration
-kubectl get configmap -n metallb-system
+# Verify node configuration
+kubectl describe node <node-name>
 ```
 
 ## Next Steps
 
 1. Once bootstrap components are synced, your cluster is ready for applications
-2. All applications should reference bootstrap components (e.g., use StorageClasses defined here)
-3. See [Architecture](architecture.md) for component details
-4. See [Maintenance](maintenance.md) for update procedures
-
-## Version Tracking
+2. All applications should reference bootstrap components as appropriate
+3. See [Architecture](architecture.md) for detailed component information
+4. See [Maintenance](maintenance.md) for update and upgrade procedures
 
 All components use pinned versions for reproducibility. See [Maintenance](maintenance.md) for how to update versions safely.

@@ -16,8 +16,8 @@ kubectl describe pod <pod-name> -n argocd
 
 **Common causes:**
 
-1. **No storage available:** StorageClasses not ready yet
-   - Solution: Check `bootstrap/storage/` has been applied
+1. **Storage not available:** PersistentVolumeClaims cannot be bound
+   - Solution: Verify storage provisioner is available in cluster
 
 2. **Resource limits:** Node doesn't have enough CPU/memory
    - Solution: Check node resources with `kubectl top nodes`
@@ -45,44 +45,15 @@ kubectl logs -n argocd -l app.kubernetes.io/name=argocd-server -f
 
 1. **Repository access denied**
    - Check: SSH key or HTTP credentials configured in ArgoCD
-   - Solution:
+   - Solution: Verify repository credentials in ArgoCD settings
 
-     ```bash
-     # For SSH, check repository secret
-     kubectl get secret -n argocd | grep repo
-     kubectl describe secret <secret-name> -n argocd
-     ```
+2. **Git reference doesn't exist**
+   - Check: targetRevision (main branch exists)
+   - Solution: Verify branch name in Application spec
 
-2. **Manifest syntax errors in this repo**
-   - Check: Git branch has valid YAML
-   - Solution:
-
-     ```bash
-     # Run kustomize locally to validate
-     kustomize build bootstrap/
-
-     # Fix any YAML errors, commit, and ArgoCD will retry
-     ```
-
-3. **CRDs missing for custom resources**
-   - Check: All CRDs installed before using them
-   - Solution:
-
-     ```bash
-     # Verify CRDs exist
-     kubectl get crd | grep gateway
-
-     # If missing, ensure bootstrap/crds/ synced first
-     ```
-
-4. **Namespace doesn't exist**
-   - Check: Resources trying to deploy to non-existent namespace
-   - Solution:
-
-     ```bash
-     # Ensure namespace creation is in manifests
-     # Or set syncPolicy.syncOptions to create namespaces
-     ```
+3. **Manifest errors in repository**
+   - Check: Kustomize build succeeds locally
+   - Solution: Run `kustomize build bootstrap/` locally to verify
 
 ### Can't access ArgoCD web UI
 
@@ -100,273 +71,102 @@ kubectl port-forward -n argocd svc/argocd-server 8080:443
 kubectl get secret argocd-initial-admin-secret -n argocd -o jsonpath="{.data.password}" | base64 -d
 ```
 
-## Storage Issues
+## Bootstrap Component Issues
 
-### StorageClasses not available
+### Kairos NodeOp CRD not registered
 
-**Check available storage:**
+**Symptom:** `Error: unable to recognize nodeop-crd.yaml: no matches for kind "NodeOp"`
 
-```bash
-kubectl get storageclass
-```
-
-**If empty or missing expected classes:**
-
-1. **Check bootstrap/storage/ manifests:**
-
-   ```bash
-   kubectl get pvc,pv
-
-   # Check provisioner is available
-   kubectl get pod -A | grep provisioner
-   ```
-
-2. **Verify provisioner pods running:**
-
-   ```bash
-   # Common provisioners
-   kubectl get pod -n kube-system | grep storage
-   kubectl get pod -n nfs-provisioner | grep nfs
-   ```
-
-3. **Check ArgoCD applied storage manifests:**
-
-   ```bash
-   kubectl describe application bootstrap -n argocd | grep -i storage
-   ```
-
-### PVC stuck in Pending
-
-**Symptom:** `kubectl get pvc` shows pending PVCs
-
-**Debug steps:**
+**Solution:**
 
 ```bash
-# Describe the PVC to see events
-kubectl describe pvc <pvc-name>
+# Check if CRD is installed
+kubectl get crd nodeop.kairos.io
 
-# Check if storage class exists
-kubectl get storageclass <storage-class-name>
+# If not present, verify bootstrap/crds/ manifests deployed
+kubectl get application bootstrap -n argocd -o yaml | grep crds
 
-# Check provisioner logs
-kubectl logs -n <provisioner-namespace> -l app=<provisioner> -f
+# Force resync if needed
+argocd app sync bootstrap
 ```
 
-**Common causes:**
+### K3s configuration not applying
 
-1. StorageClass doesn't exist
-2. Provisioner pod not running
-3. Resource exhaustion on nodes
-4. No nodes suitable for local volumes
-
-## Gateway API Issues
-
-### GatewayClass not showing
-
-**Symptom:** No GatewayClass available for creating Gateways
-
-**Check:**
-
-```bash
-kubectl get gatewayclass
-
-# List all Gateway API resources
-kubectl api-resources | grep gateway
-```
-
-**If missing:**
-
-1. **CRDs not installed:**
-
-   ```bash
-   kubectl get crd | grep gateway.networking
-
-   # If missing, check if bootstrap/crds/ synced
-   ```
-
-2. **Controller not running:**
-
-   ```bash
-   kubectl get pod -A | grep gateway
-
-   # Should see gateway controller pod running
-   ```
-
-3. **Check ArgoCD synced CRDs:**
-
-   ```bash
-   kubectl describe application bootstrap -n argocd
-   ```
-
-### Gateway not becoming Ready
-
-**Symptom:** Gateway object exists but status shows not Ready
+**Symptom:** K3s API server settings not reflected in cluster
 
 **Debug:**
 
 ```bash
-kubectl describe gateway <gateway-name>
+# Check K3s node operator logs
+kubectl logs -n kube-system -l app=k3s-node-operator -f
 
-# Check associated resources
-kubectl get service <gateway-name>
-kubectl get pod -l <gateway-selector>
+# Verify NodeOp resource deployed
+kubectl get nodeop
+
+# Check NodeOp status
+kubectl describe nodeop configure-kube-apiserver
+
+# View K3s systemd service
+kubectl debug node/<node-name> -it -- chroot /host systemctl status k3s
 ```
 
-**Typical causes:**
+### Pod Security policies not enforced
 
-1. Envoy Gateway controller not ready yet
-2. No service loadBalancer IP assigned (MetalLB issue)
-3. Gateway references non-existent secret or configmap
+**Symptom:** Pods running with elevated privileges when policy is restrictive
 
-## Envoy Gateway Issues
-
-### Envoy Gateway pod not starting
-
-**Check:**
+**Debug:**
 
 ```bash
-kubectl get pod -n envoy-gateway-system
-kubectl describe pod -n envoy-gateway-system
+# Verify pod security policy deployed
+kubectl get nodeop k3s-pod-security -o yaml
+
+# Check if admission plugin is configured
+kubectl debug node/<node-name> -it -- chroot /host grep -i "pod-security" /etc/systemd/system/k3s.service
+
+# Try deploying a privileged pod to test enforcement
+kubectl run test --image=alpine -- sleep 1000 --privileged
+# Should fail if policy is restrictive
+
+# Check pod security audit logs
+kubectl logs -n kube-system -l component=kubelet
 ```
 
-**Common causes:**
+## CRD and API Issues
 
-1. Gateway API CRDs not installed
-2. Insufficient resources
-3. RBAC permissions missing
+### CRD validation errors
 
-### EnvoyGateway resource not syncing
+**Symptom:** `error: validation failure`
 
-**Check:**
+**Debug:**
 
 ```bash
-kubectl get envoygateway
-kubectl describe envoygateway default
+# Get detailed error
+kubectl apply -f <manifest> --dry-run=server
+
+# Check CRD schema
+kubectl get crd <crd-name> -o yaml | grep -A 50 validation
+
+# Validate manifest locally
+kustomize build bootstrap/ > /tmp/manifest.yaml
+kubeconform -strict /tmp/manifest.yaml
 ```
 
-**Verify:**
+### API version conflicts
 
-1. Syntax is correct
-2. All referenced namespaces exist
-3. Provisioned settings are valid
+**Symptom:** `error: apiVersion <api> not found`
 
-## Networking Issues
-
-### MetalLB not assigning IPs
-
-**Symptom:** LoadBalancer services stuck in Pending with no external IP
-
-**Check MetalLB:**
+**Solution:**
 
 ```bash
-# Verify MetalLB pods running
-kubectl get pod -n metallb-system
+# List available API versions for a resource type
+kubectl api-resources | grep -i nodeop
 
-# Check MetalLB config
-kubectl get configmap -n metallb-system config -o yaml
+# Use correct API version in manifests
+# Check bootstrap/crds/nodeop-crd.yaml for correct apiVersion
 
-# View controller logs
-kubectl logs -n metallb-system -l app=metallb,component=controller -f
-
-# View speaker logs
-kubectl logs -n metallb-system -l app=metallb,component=speaker -f
+# Verify all CRDs installed
+kubectl get crd
 ```
-
-**Common causes:**
-
-1. **MetalLB not deployed yet**
-   - Note: This repo assumes MetalLB already installed by Kairos setup
-   - Verify: `kubectl get pod -n metallb-system`
-
-2. **MetalLB ConfigMap invalid**
-   - Check syntax of IP pools
-   - Verify IP range is available and on correct network
-
-3. **No nodes with correct labels**
-   - MetalLB speaker pod needs to be on nodes
-   - Check: `kubectl get node -L metallb.universe.tf/member`
-
-### Can't reach service via LoadBalancer IP
-
-**Test connectivity:**
-
-```bash
-# Get the LoadBalancer IP
-kubectl get svc | grep LoadBalancer
-
-# Test from control node
-curl <LoadBalancer-IP>:<Port>
-
-# If fails, check:
-# 1. Service has endpoints
-kubectl get endpoints <service-name>
-
-# 2. Pods are running
-kubectl get pod -l <label>
-
-# 3. Firewall allows traffic
-# Test from MetalLB speaker node directly
-```
-
-## NetworkPolicy Issues
-
-### Pods can't communicate (expected to be blocked)
-
-**Check if NetworkPolicy exists:**
-
-```bash
-kubectl get networkpolicy -A
-
-# Describe the policy
-kubectl describe networkpolicy <policy-name>
-```
-
-**Debug traffic:**
-
-```bash
-# Get shell in pod
-kubectl exec -it <pod> -- /bin/sh
-
-# Test connectivity to another pod
-curl <other-pod-ip>:<port>
-
-# Check logs of target pod
-kubectl logs <target-pod>
-```
-
-### Pods can't communicate (not expected to be blocked)
-
-**Ensure NetworkPolicy allows traffic:**
-
-```bash
-# List all NetworkPolicies that might affect traffic
-kubectl get networkpolicy -A
-
-# Check if policy might be blocking
-kubectl describe networkpolicy <policy-name>
-
-# Rules to check:
-# - podSelector matches source pod labels?
-# - namespaceSelector matches source namespace?
-# - ports match the traffic?
-```
-
-**Add debug NetworkPolicy to allow traffic:**
-
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: debug-allow-all
-spec:
-  podSelector: {}
-  ingress:
-  - {}
-  egress:
-  - {}
-```
-
-**Note:** This is for debugging only. Replace with proper policies.
 
 ## General Troubleshooting Steps
 
@@ -386,23 +186,7 @@ kubectl get events -A --sort-by='.lastTimestamp'
 ### 3. Check component logs
 
 ```bash
-# CRD installation
-kubectl logs -n argocd -l app.kubernetes.io/name=argocd-application-controller -f
-
-# Bootstrap component specific
-kubectl logs -n <component-namespace> -l <selector> -f
-```
-
-### 4. Verify manifests are valid
-
-```bash
-# Run kustomize locally
-kustomize build bootstrap/ | kubectl apply --dry-run=client -f -
-```
-
-### 5. Check node resources
-
-```bash
+# ArgoCD controller logs
 kubectl top nodes
 kubectl top pods -A
 ```

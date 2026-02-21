@@ -10,180 +10,178 @@ This document explains the architecture and design decisions for this bootstrap 
 
 **GitOps via ArgoCD:** The source of truth is Git. All desired state flows from this repository through ArgoCD to the cluster.
 
+**Scope:** Infrastructure layer only - foundational components for Kairos OS cluster readiness. No application deployments.
+
 ## Component Architecture
+
+Current bootstrap components installed by ArgoCD in order:
 
 ### 1. CRDs (`bootstrap/crds/`)
 
-**Purpose:** Install Custom Resource Definitions required by other components.
+**Purpose:** Install Custom Resource Definitions required by other bootstrap components.
 
-**Examples:**
+**Current contents:**
 
-- Gateway API CRDs (HTTPRoute, Gateway, GatewayClass, etc.)
-- Envoy Gateway CRDs
-- Cert-manager CRDs (if used)
+- Kairos NodeOp CRDs - enables declarative node configuration
 
-**Why separate:** CRDs must exist before operators that use them. This folder ensures they're applied first.
+**Why separate:** CRDs must exist before operators that use them. This folder ensures they're applied first in the bootstrap sequence.
 
-**Versioning:** Pin all CRD manifests to specific versions.
+**Versioning:** All CRD manifests pinned to specific versions.
 
-### 2. Storage (`bootstrap/storage/`)
+**Kairos NodeOp CRD usage:**
 
-**Purpose:** Define available storage options for the cluster.
-
-**What's included:**
-
-- Default StorageClass definition
-- StorageClasses for different performance tiers (fast, standard, archive)
-- PersistentVolume configurations if using local storage
-
-**Why important:** Applications need to know what storage is available. Defines the contract.
-
-**Configuration:** Should be customized based on your infrastructure:
+NodeOp resources allow declarative node-level configuration on Kairos OS:
 
 ```yaml
-# Example: Different storage tiers
----
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
+apiVersion: kairos.io/v1
+kind: NodeOp
 metadata:
-  name: fast
-provisioner: your-storage-provider
-parameters:
-  iops: "1000"
----
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: standard
-provisioner: your-storage-provider
-```
-
-### 3. Gateway API (`bootstrap/gateway-api/`)
-
-**Purpose:** Install Kubernetes Gateway API resources.
-
-**What's included:**
-
-- Gateway API CRDs
-- GatewayClass definitions
-- Standard Gateway configurations
-
-**Why:** Gateway API is the modern standard for Kubernetes networking. It replaces Ingress in many scenarios.
-
-**Relationship to Envoy Gateway:** Gateway API is the API layer, Envoy Gateway is the implementation.
-
-### 4. Envoy Gateway (`bootstrap/envoy-gateway/`)
-
-**Purpose:** Deploy Envoy Gateway operator and configure it.
-
-**What's included:**
-
-- Envoy Gateway controller pod
-- EnvoyGateway CRD and default configuration
-- RBAC and networking setup
-
-**Features:**
-
-- Multiple transport protocols (HTTP, HTTPS, TCP, UDP)
-- Advanced load balancing
-- Service mesh integration ready
-
-**Configuration:** The EnvoyGateway resource defines cluster-wide defaults:
-
-```yaml
-apiVersion: gateway.envoyproxy.io/v1alpha1
-kind: EnvoyGateway
-metadata:
-  name: default
+  name: configure-kube-apiserver
 spec:
-  provider:
-    type: Kubernetes
-  logging:
-    level: info
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: ""
+  # Configuration that NodeOp controller will apply to matching nodes
 ```
 
-### 5. Networking (`bootstrap/networking/`)
+### 2. K3s Configuration (`bootstrap/k3s/`)
 
-**Purpose:** Configure cluster networking and security.
+**Purpose:** Configure K3s-specific settings required for cluster operation.
 
-**What's included:**
+**Current contents:**
 
-- MetalLB configuration (L2 advertisement, IP pools)
-- Default NetworkPolicies (deny-all, then allow specific traffic)
-- CoreDNS configuration (if needed)
-- Network policies for bootstrap components themselves
+- K3s API server node operator configuration
+- Sets K3s-specific admission plugins and API server flags
 
-**MetalLB Config Example:**
+**Why important:** K3s is the distribution used by Kairos OS. This component ensures K3s API server is configured according to bootstrap requirements.
+
+**Example configuration:**
 
 ```yaml
----
-apiVersion: v1
-kind: ConfigMap
+apiVersion: kairos.io/v1
+kind: NodeOp
 metadata:
-  name: config
-  namespace: metallb-system
-data:
-  config: |
-    address-pools:
-    - name: default
-      protocol: layer2
-      addresses:
-      - 192.168.1.100-192.168.1.120
+  name: configure-kube-apiserver
+spec:
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: ""
+  sequence:
+    - name: kube-apiserver-config
+      # K3s API server configuration applied via systemd/kubelet service
 ```
 
-**NetworkPolicies:**
+### 3. Pod Security (`bootstrap/security/`)
 
-- Default: Deny all traffic (explicit is better than implicit)
-- Then: Allow specific traffic (pod-to-pod, pod-to-service, etc.)
-- Reduces attack surface significantly
+**Purpose:** Define pod security policies and admission controls.
 
-## Deployment Flow
+**Current contents:**
+
+- Pod Security admission plugin configuration for control plane nodes
+- Uses Kairos NodeOp to deploy pod security policies
+
+**Why important:** Controls which pods can run on the cluster based on security policies.
+
+**Pod Security Levels:**
+
+- `restricted` - Most restrictive, suitable for production
+- `baseline` - Minimal restrictions, includes common security best practices
+- `privileged` - Allows all capabilities (use sparingly)
+
+**Example:**
+
+```yaml
+apiVersion: kairos.io/v1
+kind: NodeOp
+metadata:
+  name: k3s-pod-security
+spec:
+  # Configures K3s to use pod security admission plugin
+  sequence:
+    - name: pod-security-setup
+      # Deployment of pod security admission configuration
+```
+
+## Deployment Architecture
 
 ```
-1. CRDs installed first
-   ↓
-2. StorageClasses available
-   ↓
-3. Gateway API installed
-   ↓
-4. Envoy Gateway deployed (uses Gateway API CRDs)
-   ↓
-5. Networking configured (uses Envoy Gateway for traffic)
+┌──────────────────────────────────┐
+│  Kairos OS Cluster               │
+│  (with K3s pre-installed)        │
+└──────────────────────────────────┘
+           ↓
+┌──────────────────────────────────┐
+│  Terraform                       │
+│  - Installs ArgoCD via Helm      │
+└──────────────────────────────────┘
+           ↓
+┌──────────────────────────────────────────────┐
+│  ArgoCD in argocd namespace                  │
+│  - Server                                    │
+│  - Application Controller                    │
+│  - Repository Server                         │
+└──────────────────────────────────────────────┘
+           ↓
+┌──────────────────────────────────────────────┐
+│  ArgoCD syncs this repository (bootstrap/)   │
+│  Applies components in order:                │
+│  1. CRDs (Kairos NodeOp)                     │
+│  2. K3s Configuration                        │
+│  3. Pod Security Configuration               │
+└──────────────────────────────────────────────┘
+           ↓
+┌──────────────────────────────────┐
+│  Cluster Ready                   │
+│  - CRDs registered               │
+│  - K3s configured                │
+│  - Pod security enforced         │
+└──────────────────────────────────┘
 ```
 
-## Why This Order Matters
+## Deployment Order
 
-1. **CRDs first:** Operators need CRDs to exist or they crash
-2. **Storage second:** No data persistence until storage classes exist
-3. **Gateway API third:** Envoy Gateway depends on it
-4. **Envoy Gateway fourth:** Needs CRDs from step 1
-5. **Networking last:** Can now route traffic to all components
+Components are applied in strict order via `bootstrap/kustomization.yaml`:
+
+1. **CRDs first** - Kairos NodeOp CRDs must exist before NodeOp resources
+2. **K3s Configuration** - Configures API server and cluster networking
+3. **Pod Security** - Applies security policies to nodes
+
+**Why order matters:**
+
+- Kubernetes requires CRDs to exist before resources that reference them
+- K3s API server configuration must be set early for pod security policies to work
+- Pod security policies then enforced at admission time
 
 ## Kustomize Structure
 
-Each component uses Kustomize for flexibility:
+Each component uses Kustomize for composition:
 
 ```
-bootstrap/envoy-gateway/
-├── kustomization.yaml        # Base configuration
-├── base/
-│   ├── namespace.yaml
-│   ├── deployment.yaml
-│   ├── service.yaml
-│   └── rbac.yaml
-└── overlays/
-    ├── production/
-    │   ├── kustomization.yaml
-    │   └── patches.yaml
-    └── staging/
-        ├── kustomization.yaml
-        └── patches.yaml
+bootstrap/
+├── kustomization.yaml          # Root Kustomization
+├── crds/
+│   ├── kustomization.yaml
+│   └── nodeop-crd.yaml
+├── k3s/
+│   ├── kustomization.yaml
+│   └── configure-kube-apiserver-nodeop.yaml
+└── security/
+    ├── kustomization.yaml
+    └── k3s-pod-security-nodeop.yaml
+
+argocd/
+├── kustomization.yaml          # Root Kustomization
+├── root-application.yaml       # Bootstrap Application
+└── applications/
+    ├── kustomization.yaml
+    ├── bootstrap-application.yaml
+    └── kairos-operator-application.yaml
 ```
 
-This allows:
+**Kustomize benefits:**
 
-- Base configuration that works for most cases
-- Environment-specific customization without duplicating files
+- Declarative resource composition
+- Reusable base configurations
+- Consistent labeling across all resources
+- Version pinning for all referenced resources
 
 ## Version Pinning Strategy
 
@@ -206,57 +204,62 @@ image: envoyproxy/envoy-gateway:v1.2.3
 
 ## ArgoCD Integration
 
-ArgoCD Application manifests (not in this repo, but important to understand):
+The bootstrap process is driven by ArgoCD Applications:
+
+**Root Application** (`argocd/root-application.yaml`):
+
+- Points to `bootstrap/` directory
+- Syncs bootstrap components
+- Applies with `prune: true` and `selfHeal: true`
+
+**Automatic Sync Policies:**
 
 ```yaml
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: bootstrap
-  namespace: argocd
-spec:
-  project: default
-  source:
-    repoURL: https://github.com/fam-melcher/homelab-argocd.git
-    targetRevision: main
-    path: bootstrap
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: default
-  syncPolicy:
-    automated:
-      prune: true    # Remove resources not in Git
-      selfHeal: true # Resync if cluster drifts from Git
+syncPolicy:
+  automated:
+    prune: true       # Remove resources deleted from Git
+    selfHeal: true    # Correct drift from Git state
 ```
 
-**Key points:**
-
-- `targetRevision: main` - Always syncs from main branch
-- `automated.prune: true` - Removes resources deleted from Git
-- `automated.selfHeal: true` - Corrects any manual cluster changes
+**Key principle:** If it's not in Git, it gets deleted. If cluster state drifts from Git, ArgoCD corrects it.
 
 ## Disaster Recovery
 
 Because everything is GitOps:
 
-1. **Cluster lost?** Deploy new Kairos OS + Terraform = identical cluster
-2. **Changes lost?** ArgoCD syncs from Git automatically
-3. **Version issues?** Git history shows what was deployed and when
+1. **Cluster lost?** Deploy new Kairos OS + Terraform + ArgoCD sync = identical cluster
+2. **Configuration changed manually?** ArgoCD syncs from Git automatically (selfHeal)
+3. **Resource deleted accidentally?** ArgoCD reapplies from Git (prune + selfHeal)
+4. **Version issues?** Git history shows exact versions deployed and when
 
 ## Future Extensibility
 
 To add new bootstrap components:
 
-1. Create folder under `bootstrap/`
-2. Define all resources (CRDs, operators, configs)
-3. Pin all versions
-4. Add to ArgoCD Application path
-5. Document in this file
-6. Test in staging first
+1. Create folder under `bootstrap/<component>/`
+2. Define all resources (YAML manifests or NodeOp declarations)
+3. Create `kustomization.yaml` for the component
+4. Add to `bootstrap/kustomization.yaml` resources list
+5. Document changes in this file
+6. Test with ArgoCD sync
+7. Commit and push
 
 Example future additions:
 
-- Cert-manager for certificates
-- External Secrets Operator for secrets management
-- Observability stack (Prometheus, Grafana, Loki)
-- Service mesh (Istio, Linkerd)
+- StorageClass definitions
+- NetworkPolicy defaults
+- Cert-manager for certificate management
+- Observability infrastructure (logging, metrics)
+- Service mesh foundations
+
+## CI/CD Pipeline
+
+Before any bootstrap component reaches `main`:
+
+1. **Static Analysis** - yamllint for YAML syntax
+2. **Schema Validation** - kubeconform for Kubernetes manifest validity
+3. **Build Validation** - kustomize build to catch composition errors
+4. **Image Pinning** - verification that no `latest` tags are used
+5. **Secret Scanning** - ensure no credentials are committed
+
+See `.github/workflows/validate-bootstrap.yml` for implementation.
