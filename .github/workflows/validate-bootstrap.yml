@@ -373,6 +373,27 @@ jobs:
             exit 0
           fi
 
+          # DEBUG START
+          echo "Rendered manifest debug:"
+          echo "bootstrap_out=$bootstrap_out"
+          echo "argocd_out=$argocd_out"
+          
+          # File sizes
+          ls -lh "$bootstrap_out" "$argocd_out" || true
+          
+          # Approx doc/object counts
+          echo "bootstrap: kind lines = $(grep -c '^kind:' "$bootstrap_out" || true)"
+          echo "argocd:    kind lines = $(grep -c '^kind:' "$argocd_out" || true)"
+          echo "bootstrap: apiVersion lines = $(grep -c '^apiVersion:' "$bootstrap_out" || true)"
+          echo "argocd:    apiVersion lines = $(grep -c '^apiVersion:' "$argocd_out" || true)"
+
+          echo "DEBUG: Print rendered files"
+          echo "# bootstrap"
+          cat "$bootstrap_out" || true
+          echo "# argocd"
+          cat "$argocd_out" || true
+          # DEBUG END
+          
           log="$RUNNER_TEMP/kube-linter.log"
           artifact="kube-linter-log"
 
