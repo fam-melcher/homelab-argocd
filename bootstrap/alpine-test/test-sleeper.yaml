@@ -8,4 +8,3 @@ spec:
     - name: sleep
       image: alpine:latest
       command: ["sleep", "86400"]
-      # Long comment removed
