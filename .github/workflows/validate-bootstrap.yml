@@ -14,9 +14,9 @@ jobs:
     runs-on: ubuntu-latest
     name: Static Analysis
 
-    # NEW: expose outputs to downstream jobs (validation-summary)
+    # Expose yamllint info to the summary job
     outputs:
-      yamllint_failed: ${{ steps.yamllint.outputs.yamllint_failed }}
+      yamllint_status: ${{ steps.yamllint.outputs.yamllint_status }}
       yamllint_output: ${{ steps.yamllint.outputs.yamllint_output }}
 
     steps:
@@ -29,6 +29,7 @@ jobs:
         id: changed-files
         shell: bash
         env:
+          # For PRs this is the target branch (e.g. main/master); for other events it's empty.
           BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
@@ -36,9 +37,13 @@ jobs:
           base="${BASE_REF:-main}"
           echo "Base branch: $base"
 
+          # Make sure the base branch exists locally as refs/remotes/origin/<base>
           git fetch --no-tags --prune origin "+refs/heads/${base}:refs/remotes/origin/${base}"
+
+          # Sanity check: ensure the ref exists now
           git rev-parse --verify "refs/remotes/origin/${base}" >/dev/null
 
+          # Diff merge-base (good for PRs): origin/<base>...HEAD
           changed="$(
             git diff --name-only --diff-filter=ACMRT "origin/${base}...HEAD" -- \
               'bootstrap/**' \
@@ -62,8 +67,6 @@ jobs:
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # CHANGED: capture yamllint output and do not fail the job immediately
-      # (so we can always post the output to the PR comment).
       - name: Run yamllint on changed files
         id: yamllint
         if: steps.changed-files.outputs.has_changes == 'true'
@@ -76,14 +79,15 @@ jobs:
 
           files_to_lint=()
           for f in "${files[@]}"; do
+            # trim leading whitespace
             f="${f#"${f%%[![:space:]]*}"}"
+            # trim trailing whitespace
             f="${f%"${f##*[![:space:]]}"}"
             [ -n "$f" ] && files_to_lint+=("$f")
           done
 
           if [ ${#files_to_lint[@]} -eq 0 ]; then
-            echo "No YAML files to lint"
-            echo "yamllint_failed=false" >> "$GITHUB_OUTPUT"
+            echo "yamllint_status=SKIPPED" >> "$GITHUB_OUTPUT"
             {
               echo "yamllint_output<<EOF"
               echo "No YAML files to lint."
@@ -95,26 +99,40 @@ jobs:
           echo "Linting files:"
           printf '%s\n' "${files_to_lint[@]}"
 
-          # Capture output + exit code, but do not fail this step yet
+          # Capture raw yamllint output in a parseable format.
+          # Do not rely on exit code for pass/warn/fail classification; classify by content.
           set +e
-          output="$(yamllint -c .yamllint "${files_to_lint[@]}" 2>&1)"
+          output="$(yamllint -f parsable -c .yamllint "${files_to_lint[@]}" 2>&1)"
           rc=$?
           set -e
 
-          # Always publish output for downstream comment
+          errors_count="$(printf '%s\n' "$output" | grep -c '\[error\]' || true)"
+          warnings_count="$(printf '%s\n' "$output" | grep -c '\[warning\]' || true)"
+
+          status="PASSED"
+          if [ "$errors_count" -gt 0 ]; then
+            status="FAILED"
+          elif [ "$warnings_count" -gt 0 ]; then
+            status="WARNINGS"
+          else
+            # If yamllint exited nonzero but didn't emit the usual markers, treat it as a tool/config failure
+            if [ "$rc" -ne 0 ] && [ -n "$output" ]; then
+              status="FAILED"
+            fi
+          fi
+
+          echo "yamllint_status=$status" >> "$GITHUB_OUTPUT"
           {
             echo "yamllint_output<<EOF"
-            printf '%s\n' "$output"
+            if [ -n "$output" ]; then
+              printf '%s\n' "$output"
+            else
+              echo "No findings."
+            fi
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-          if [ $rc -ne 0 ]; then
-            echo "yamllint_failed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "yamllint_failed=false" >> "$GITHUB_OUTPUT"
-          fi
-
-          # IMPORTANT: don't exit nonzero here; let the summary job fail the workflow later
+          # Always exit 0 here so the validation-summary job can post a comment even when yamllint fails.
           exit 0
 
       - name: Install kubeconform
@@ -127,6 +145,7 @@ jobs:
       - name: Validate Kubernetes schemas on changed files
         if: steps.changed-files.outputs.has_changes == 'true'
         run: |
+          set -euo pipefail
           changed_files="${{ steps.changed-files.outputs.changed_files }}"
           errors=0
           echo "$changed_files" | grep -v kustomization.yaml | while read -r file; do
@@ -224,24 +243,33 @@ jobs:
               return s === "passed" ? "✅ PASSED" : "❌ FAILED";
             }
 
+            function yamllintBadge(s) {
+              if (s === "FAILED") return "❌ FAILED";
+              if (s === "WARNINGS") return "⚠️ WARNINGS";
+              if (s === "SKIPPED") return "➖ SKIPPED";
+              return "✅ PASSED";
+            }
+
             const overall = status(`${{ steps.report.outputs.overall }}`);
             const layer1 = status(`${{ steps.report.outputs.layer1_status }}`);
             const layer2 = status(`${{ steps.report.outputs.layer2_status }}`);
             const layer3 = status(`${{ steps.report.outputs.layer3_status }}`);
 
-            const yamllintFailed = `${{ needs.static-analysis.outputs.yamllint_failed }}` === "true";
+            const yamllintStatus = `${{ needs.static-analysis.outputs.yamllint_status }}` || "SKIPPED";
             const yamllintOutputRaw = `${{ needs.static-analysis.outputs.yamllint_output }}` || "";
-            const yamllintOutput = yamllintOutputRaw.trim()
-              ? `\n\n## Yamllint (changed files)\n\`\`\`\n${yamllintOutputRaw}\n\`\`\``
-              : `\n\n## Yamllint (changed files)\nNo output.`;
+
+            const yamllintSection =
+              `\n\n### Yamllint (changed files)\n- Result: ${yamllintBadge(yamllintStatus)}\n` +
+              (yamllintOutputRaw.trim()
+                ? `\n\`\`\`\n${yamllintOutputRaw}\n\`\`\`\n`
+                : "\n_No output._\n");
 
             const report = `# CI Pipeline Validation Report
 
             ## Overall Status: ${overall}
 
             ### Layer 1: Static Analysis
-            - Status: ${layer1}
-            - Yamllint: ${yamllintFailed ? "❌ FAILED" : "✅ PASSED"}${yamllintOutput}
+            - Status: ${layer1}${yamllintSection}
 
             ### Layer 2: Build & Integration
             - Status: ${layer2}
@@ -259,10 +287,10 @@ jobs:
 
       - name: Check validation results
         run: |
-          # Fail the workflow if any job failed OR yamllint failed (even though we didn't fail static-analysis early).
+          # Fail if any core job failed or if yamllint has ERRORS.
           if [ "${{ needs.static-analysis.result }}" != "success" ] || \
              [ "${{ needs.build-validation.result }}" != "success" ] || \
              [ "${{ needs.deployment-readiness.result }}" != "success" ] || \
-             [ "${{ needs.static-analysis.outputs.yamllint_failed }}" = "true" ]; then
+             [ "${{ needs.static-analysis.outputs.yamllint_status }}" = "FAILED" ]; then
             exit 1
           fi
