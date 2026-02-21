@@ -338,8 +338,9 @@ jobs:
         run: |
           set -euo pipefail
           # Pin a version for reproducibility; update as desired.
-          version="0.6.8"
-          curl -sSL -o /tmp/kube-linter.tar.gz "https://github.com/stackrox/kube-linter/releases/download/${version}/kube-linter-linux.tar.gz"
+          version="v0.8.1"
+          download_url="https://github.com/stackrox/kube-linter/releases/download/${version}/kube-linter-linux.tar.gz"
+          curl -sSL -o /tmp/kube-linter.tar.gz "${download_url}"
           tar -C /tmp -xzf /tmp/kube-linter.tar.gz
           sudo mv /tmp/kube-linter /usr/local/bin/kube-linter
           kube-linter version
