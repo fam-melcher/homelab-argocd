@@ -34,14 +34,14 @@ kubectl api-resources
 Check each component's manifests:
 
 ```bash
-# ArgoCD version
-cat argocd/argocd-deployment.yaml | grep image
+# Kairos NodeOp CRD version
+grep "apiVersion:" bootstrap/crds/nodeop-crd.yaml
 
-# Envoy Gateway version
-cat bootstrap/envoy-gateway/deployment.yaml | grep image
+# K3s node operator configuration
+grep -i "image:" bootstrap/k3s/*.yaml
 
-# Gateway API CRDs (version in CRD apiVersion field)
-grep "apiVersion:" bootstrap/gateway-api/crds.yaml
+# Pod security configuration
+cat bootstrap/security/k3s-pod-security-nodeop.yaml
 ```
 
 ## Updating Components
@@ -67,35 +67,37 @@ grep "apiVersion:" bootstrap/gateway-api/crds.yaml
 
 ### Step 2: Update Manifests
 
-**Example: Updating Envoy Gateway**
+**Example: Updating Kairos NodeOp CRD**
 
 1. Find current version:
 
    ```bash
-   grep -n "envoyproxy/envoy-gateway" bootstrap/envoy-gateway/*.yaml
+   grep "apiVersion:" bootstrap/crds/nodeop-crd.yaml
    ```
 
-2. Update image reference:
-
-   ```yaml
-   # OLD:
-   image: envoyproxy/envoy-gateway:v1.2.3
-
-   # NEW:
-   image: envoyproxy/envoy-gateway:v1.5.0
-   ```
-
-3. Check for CRD updates:
+2. Check for new CRD versions:
 
    ```bash
-   # Download new CRDs from release
-   curl https://raw.githubusercontent.com/envoyproxy/gateway/v1.5.0/api/config/v1alpha1/crd.yaml -o bootstrap/crds/envoy-gateway-crds-v1.5.0.yaml
+   # Check Kairos releases for updated NodeOp CRDs
+   curl https://raw.githubusercontent.com/kairos-io/kairos/main/pkg/operators/nodeop/crd.yaml -o nodeop-crd-new.yaml
 
-   # Compare with old version
-   diff bootstrap/crds/envoy-gateway-crds-v1.2.3.yaml bootstrap/crds/envoy-gateway-crds-v1.5.0.yaml
+   # Compare with current version
+   diff bootstrap/crds/nodeop-crd.yaml nodeop-crd-new.yaml
 
-   # Remove old version
-   rm bootstrap/crds/envoy-gateway-crds-v1.2.3.yaml
+   # If no breaking changes, update
+   cp nodeop-crd-new.yaml bootstrap/crds/nodeop-crd.yaml
+   ```
+
+3. Update component manifests:
+
+   ```bash
+   # K3s configuration
+   grep -r "image:" bootstrap/k3s/
+   # Update image tags to new versions
+
+   # Pod security configuration
+   grep -r "image:" bootstrap/security/
+   # Update image tags to new versions
    ```
 
 ### Step 3: Test Update
