@@ -337,12 +337,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Pin a version for reproducibility; update as desired.
           version="v0.8.1"
           download_url="https://github.com/stackrox/kube-linter/releases/download/${version}/kube-linter-linux.tar.gz"
-          curl -sSL -o /tmp/kube-linter.tar.gz "${download_url}"
+          curl -fsSL -o /tmp/kube-linter.tar.gz "${download_url}"
           tar -C /tmp -xzf /tmp/kube-linter.tar.gz
           sudo mv /tmp/kube-linter /usr/local/bin/kube-linter
+          sudo chmod +x /usr/local/bin/kube-linter
           kube-linter version
 
       - name: Run kube-linter on rendered manifests
@@ -351,12 +351,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Render both kustomizations to temp files
           bootstrap_out="$RUNNER_TEMP/rendered-bootstrap.yaml"
           argocd_out="$RUNNER_TEMP/rendered-argocd.yaml"
 
-          # We expect kustomize build errors to be handled by the earlier steps,
-          # but we still guard here.
           set +e
           kustomize build bootstrap/ >"$bootstrap_out" 2>/dev/null
           rc1=$?
@@ -384,26 +381,22 @@ jobs:
           rc=$?
           set -e
 
-          # kube-linter uses exit code 1 when it finds lint issues.
-          # We'll classify based on output content to get WARNINGS vs FAILED.
-          errors_count="$(grep -ciE '\berror\b' "$log" || true)"
-          warnings_count="$(grep -ciE '\bwarning\b' "$log" || true)"
-
+          # kube-linter exit codes:
+          # 0 = no findings
+          # 1 = findings
+          # >1 = tool error
           status="PASSED"
-          if [ "$errors_count" -gt 0 ]; then
-            status="FAILED"
-          elif [ "$warnings_count" -gt 0 ]; then
-            status="WARNINGS"
+          if [ $rc -eq 0 ]; then
+            status="PASSED"
           else
-            # If it exited nonzero but didn't label anything, treat as tool failure
-            [ "$rc" -ne 0 ] && status="FAILED"
+            status="FAILED"
           fi
 
           excerpt="$(sed -n '1,120p' "$log" || true)"
           if [ -z "${excerpt:-}" ]; then
-            summary="No kube-linter findings."
+            summary="No kube-linter output."
           else
-            summary="Errors: ${errors_count}, Warnings: ${warnings_count}\n\n${excerpt}"
+            summary="${excerpt}"
           fi
 
           echo "kubelinter_status=$status" >> "$GITHUB_OUTPUT"
@@ -418,7 +411,7 @@ jobs:
           exit 0
 
       - name: Upload kube-linter log
-        if: steps.kube-linter.outputs.kubelinter_status == 'FAILED' || steps.kube-linter.outputs.kubelinter_status == 'WARNINGS'
+        if: steps.kube-linter.outputs.kubelinter_status == 'FAILED'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.kube-linter.outputs.kubelinter_artifact }}
@@ -507,27 +500,6 @@ jobs:
 
           echo "overall_checks=$overall" >> "$GITHUB_OUTPUT"
 
-      - name: Generate validation report
-        id: report
-        run: |
-          static_status="${{ needs.static-analysis.result }}"
-          build_status="${{ needs.build-validation.result }}"
-          deployment_status="${{ needs.deployment-readiness.result }}"
-
-          overall="passed"
-          if [ "$static_status" != "success" ] || [ "$build_status" != "success" ] || [ "$deployment_status" != "success" ]; then
-            overall="failed"
-          fi
-
-          layer1_status=$([ "$static_status" = "success" ] && echo "passed" || echo "failed")
-          layer2_status=$([ "$build_status" = "success" ] && echo "passed" || echo "failed")
-          layer3_status=$([ "$deployment_status" = "success" ] && echo "passed" || echo "failed")
-
-          echo "overall=$overall" >> $GITHUB_OUTPUT
-          echo "layer1_status=$layer1_status" >> $GITHUB_OUTPUT
-          echo "layer2_status=$layer2_status" >> $GITHUB_OUTPUT
-          echo "layer3_status=$layer3_status" >> $GITHUB_OUTPUT
-
       - name: Generate app token
         id: app-token
         continue-on-error: true
@@ -541,10 +513,6 @@ jobs:
         with:
           github-token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
           script: |
-            function status(s) {
-              return s === "passed" ? "✅ PASSED" : "❌ FAILED";
-            }
-
             function badge(s) {
               if (s === "FAILED") return "❌ FAILED";
               if (s === "WARNINGS") return "⚠️ WARNINGS";
@@ -570,54 +538,47 @@ jobs:
 
             const overallChecks = `${{ steps.overall.outputs.overall_checks }}` || "SKIPPED";
 
-            const layer1 = status(`${{ steps.report.outputs.layer1_status }}`);
-            const layer2 = status(`${{ steps.report.outputs.layer2_status }}`);
-            const layer3 = status(`${{ steps.report.outputs.layer3_status }}`);
+            // FIX: avoid JS template-literal pitfalls by building with normal string concatenation
+            let report = "# CI Pipeline Validation Report\n\n";
+            report += "## Merge Status (computed from checks): " + badge(overallChecks) + "\n";
+            report += "This matches whether the PR is merge-blocked by this workflow.\n";
 
-            const report = `# CI Pipeline Validation Report
-
-            ## Merge Status (computed from checks): ${badge(overallChecks)}
-            This matches whether the PR is merge-blocked by this workflow.
-
-            ### Layer 1: Static Analysis
-            - Job status: ${layer1}` +
-            section(
+            report += "\n### Layer 1: Static Analysis";
+            report += section(
               "Yamllint (changed files)",
               `${{ needs.static-analysis.outputs.yamllint_status }}`,
               `${{ needs.static-analysis.outputs.yamllint_summary }}`,
               `${{ needs.static-analysis.outputs.yamllint_artifact }}`
-            ) +
-            section(
+            );
+            report += section(
               "Kubeconform (changed files)",
               `${{ needs.static-analysis.outputs.kubeconform_status }}`,
               `${{ needs.static-analysis.outputs.kubeconform_summary }}`,
               `${{ needs.static-analysis.outputs.kubeconform_artifact }}`
-            ) + `
+            );
 
-            ### Layer 2: Build & Integration
-            - Job status: ${layer2}` +
-            section(
+            report += "\n### Layer 2: Build & Integration";
+            report += section(
               "Kustomize build (bootstrap/)",
               `${{ needs.build-validation.outputs.kustomize_bootstrap_status }}`,
               `${{ needs.build-validation.outputs.kustomize_bootstrap_summary }}`,
               `${{ needs.build-validation.outputs.kustomize_bootstrap_artifact }}`
-            ) +
-            section(
+            );
+            report += section(
               "Kustomize build (argocd/)",
               `${{ needs.build-validation.outputs.kustomize_argocd_status }}`,
               `${{ needs.build-validation.outputs.kustomize_argocd_summary }}`,
               `${{ needs.build-validation.outputs.kustomize_argocd_artifact }}`
-            ) +
-            section(
+            );
+            report += section(
               "kube-linter (rendered manifests)",
               `${{ needs.build-validation.outputs.kubelinter_status }}`,
               `${{ needs.build-validation.outputs.kubelinter_summary }}`,
               `${{ needs.build-validation.outputs.kubelinter_artifact }}`
-            ) + `
+            );
 
-            ### Layer 3: Deployment Readiness
-            - Job status: ${layer3}` +
-            section(
+            report += "\n### Layer 3: Deployment Readiness";
+            report += section(
               "CRD ordering",
               `${{ needs.deployment-readiness.outputs.crd_ordering_status }}`,
               `${{ needs.deployment-readiness.outputs.crd_ordering_summary }}`,
