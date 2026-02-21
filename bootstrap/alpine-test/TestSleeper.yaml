@@ -5,6 +5,6 @@ metadata:
   namespace: alpine-test
 spec:
   containers:
-  - name: sleep
-    image: alpine:latest
-    command: [ "sleep", "86400" ]
+    - name: sleep
+      image: alpine:latest
+      command: ["sleep", "86400"]
