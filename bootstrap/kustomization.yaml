@@ -5,7 +5,6 @@ kind: Kustomization
 # CRDs must be applied first, then components that depend on them
 resources:
   - crds/
-  - k3s/
   - security/
 
 labels:

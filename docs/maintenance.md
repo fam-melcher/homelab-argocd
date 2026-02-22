@@ -37,8 +37,8 @@ Check each component's manifests:
 # Kairos NodeOp CRD version
 grep "apiVersion:" bootstrap/crds/nodeop-crd.yaml
 
-# K3s node operator configuration
-grep -i "image:" bootstrap/k3s/*.yaml
+# Ops resources (NodeOp / NodeOpUpgrade)
+grep -i "image:" ops/kairos/k3s/*.yaml ops/kairos/k3s/upgrades/active/*.yaml
 
 # Pod security configuration
 cat bootstrap/security/k3s-pod-security-nodeop.yaml
@@ -48,11 +48,14 @@ cat bootstrap/security/k3s-pod-security-nodeop.yaml
 
 ### Upgrading Kairos OS and K3s (NodeOpUpgrade)
 
-**GitOps-driven OS upgrades via NodeOpUpgrade resource:**
+**GitOps-driven OS upgrades via immutable NodeOpUpgrade manifests:**
 
-The `bootstrap/k3s/kairos-nodeopupgrade.yaml` resource provides a declarative way to upgrade Kairos OS and K3s on your cluster nodes.
+Upgrade manifests live under `ops/kairos/k3s/upgrades/` and are managed by the
+`kairos-ops` ArgoCD Application (manual-sync). Only manifests in
+`upgrades/active/` are applied; `upgrades/archive/` preserves completed upgrades
+for audit purposes.
 
-**To perform an OS/K3s upgrade:**
+**Upgrade lifecycle:**
 
 1. **Check available versions:**
 
@@ -61,50 +64,79 @@ The `bootstrap/k3s/kairos-nodeopupgrade.yaml` resource provides a declarative wa
    bash scripts/check-kairos-releases.sh
    ```
 
-   This script:
-   - Queries GitHub for the latest Kairos release
-   - Extracts available distributions from ISO asset names
-   - Fetches tags from Quay.io API for each distribution
-   - Displays all variants with Kairos and Kubernetes versions
-   - Shows complete Quay URLs ready to copy into manifests
+2. **Create a new immutable upgrade manifest:**
 
-2. **Update the image in bootstrap/k3s/kairos-nodeopupgrade.yaml:**
+   ```bash
+   # Date-stamp the manifest name (YYYY-MM-DD)
+   NEW_DATE="$(date +%F)"
+   NEW_FILE="ops/kairos/k3s/upgrades/active/kairos-upgrade-${NEW_DATE}.yaml"
+   ```
+
+   Create `$NEW_FILE` with:
 
    ```yaml
    apiVersion: operator.kairos.io/v1alpha1
    kind: NodeOpUpgrade
    metadata:
-     name: kairos-upgrade
+     name: kairos-upgrade-YYYY-MM-DD
+     namespace: default
    spec:
-     image: quay.io/kairos/ubuntu:24.04-standard-amd64-generic-v3.7.2-k3s-v1.33.7-k3s3  # Update this
+     image: quay.io/kairos/ubuntu:24.04-standard-amd64-generic-vX.Y.Z-k3s-vA.B.C-k3sN
      nodeSelector:
        matchLabels:
          kubernetes.io/arch: amd64
-     concurrency: 1  # Upgrade one node at a time
-     stopOnFailure: true  # Stop if any node fails
+         kairos.io/managed: "true"
+     concurrency: 1
+     stopOnFailure: true
+     upgradeActive: true
+     upgradeRecovery: false
+     force: false
    ```
 
-3. **Push to your feature branch:**
+3. **Archive the previous active upgrade manifest:**
+
+   ```bash
+   OLD_FILE="ops/kairos/k3s/upgrades/active/kairos-upgrade-<old-date>.yaml"
+   git mv "$OLD_FILE" ops/kairos/k3s/upgrades/archive/
+   ```
+
+4. **Update `ops/kairos/k3s/upgrades/active/kustomization.yaml`** to reference the new file:
+
+   ```yaml
+   resources:
+     - kairos-upgrade-YYYY-MM-DD.yaml
+   ```
+
+5. **Push to your feature branch and create a PR:**
 
    ```bash
    git checkout -b chore/upgrade-kairos-to-vX-Y-Z
-   # Edit bootstrap/k3s/kairos-nodeopupgrade.yaml
-   git add ./bootstrap/k3s/kairos-nodeopupgrade.yaml
+   git add ops/kairos/k3s/upgrades/
    git commit -m "chore: upgrade Kairos OS and K3s to vX.Y.Z"
    git push origin chore/upgrade-kairos-to-vX-Y-Z
    ```
 
-4. **Create PR and merge to main**
+6. **Merge to main.**
 
-5. **ArgoCD automatically applies the upgrade** - All matching nodes will upgrade according to the concurrency and failure settings.
+7. **Manually trigger the `kairos-ops` ArgoCD Application sync** — ArgoCD will
+   apply the new NodeOpUpgrade. All matching nodes will upgrade in a controlled
+   manner according to `concurrency` and `stopOnFailure` settings.
 
-**Important upgrade considerations:**
+> **Important:** The `kairos-ops` Application is **manual-sync only**. ArgoCD
+> will NOT automatically apply upgrades. You must trigger the sync explicitly.
 
-- `concurrency: 1` - Only upgrade one node at a time for high availability
-- `stopOnFailure: true` - Stop upgrading if any node fails to prevent cluster instability
-- Always test in staging first if possible
-- Monitor node status during upgrades: `kubectl get nodes -w`
-- Check node events: `kubectl describe node <node-name>`
+**Why immutable manifests?**
+
+NodeOpUpgrade is a one-shot operation. Mutating the manifest name in place while
+ArgoCD continuously reconciles risks unintended re-runs. By using dated names and
+archiving completed upgrades, each upgrade run maps to a distinct commit in git.
+
+**On a new cluster:**
+
+When bootstrapping a new cluster, the `kairos-ops` Application will see the
+current `upgrades/active/` manifest as out-of-sync. You can trigger a manual
+sync to apply the upgrade, or skip it if the cluster is already on the target
+version.
 
 ### Step 1: Plan the Update
 

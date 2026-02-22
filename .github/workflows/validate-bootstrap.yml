@@ -7,6 +7,7 @@ on:
     paths:
       - "bootstrap/**"
       - "argocd/**"
+      - "ops/**"
       - ".github/workflows/validate-bootstrap.yml"
 
 jobs:
@@ -48,6 +49,7 @@ jobs:
             git diff --name-only --diff-filter=ACMRT "origin/${base}...HEAD" -- \
               'bootstrap/**' \
               'argocd/**' \
+              'ops/**' \
             | grep -E '\.(ya?ml)$' \
             || true
           )"
@@ -73,12 +75,15 @@ jobs:
 
           bootstrap_out="$RUNNER_TEMP/rendered-bootstrap.yaml"
           argocd_out="$RUNNER_TEMP/rendered-argocd.yaml"
+          ops_out="$RUNNER_TEMP/rendered-ops.yaml"
 
           kustomize build bootstrap/ >"$bootstrap_out"
           kustomize build argocd/ >"$argocd_out"
+          kustomize build ops/kairos/k3s/ >"$ops_out"
 
           echo "bootstrap_out=$bootstrap_out" >> "$GITHUB_OUTPUT"
           echo "argocd_out=$argocd_out" >> "$GITHUB_OUTPUT"
+          echo "ops_out=$ops_out" >> "$GITHUB_OUTPUT"
 
       - name: Run yamllint on changed source files + rendered output
         id: yamllint
@@ -98,7 +103,7 @@ jobs:
           done
 
           # Always include rendered outputs for linting too.
-          files_to_lint+=("${{ steps.render.outputs.bootstrap_out }}" "${{ steps.render.outputs.argocd_out }}")
+          files_to_lint+=("${{ steps.render.outputs.bootstrap_out }}" "${{ steps.render.outputs.argocd_out }}" "${{ steps.render.outputs.ops_out }}")
 
           log="$RUNNER_TEMP/yamllint.log"
           artifact="yamllint-log"
@@ -167,6 +172,7 @@ jobs:
           rendered=(
             "${{ steps.render.outputs.bootstrap_out }}"
             "${{ steps.render.outputs.argocd_out }}"
+            "${{ steps.render.outputs.ops_out }}"
           )
 
           log="$RUNNER_TEMP/kubeconform.log"
@@ -219,6 +225,10 @@ jobs:
       kustomize_argocd_status: ${{ steps.kustomize-argocd.outputs.kustomize_status }}
       kustomize_argocd_summary: ${{ steps.kustomize-argocd.outputs.kustomize_summary }}
       kustomize_argocd_artifact: ${{ steps.kustomize-argocd.outputs.kustomize_artifact }}
+
+      kustomize_ops_status: ${{ steps.kustomize-ops.outputs.kustomize_status }}
+      kustomize_ops_summary: ${{ steps.kustomize-ops.outputs.kustomize_summary }}
+      kustomize_ops_artifact: ${{ steps.kustomize-ops.outputs.kustomize_artifact }}
 
       kubelinter_status: ${{ steps.kube-linter.outputs.kubelinter_status }}
       kubelinter_summary: ${{ steps.kube-linter.outputs.kubelinter_summary }}
@@ -313,6 +323,44 @@ jobs:
           path: ${{ steps.kustomize-argocd.outputs.kustomize_log_path }}
           if-no-files-found: ignore
 
+      - name: Validate Kustomize build - ops
+        id: kustomize-ops
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          log="$RUNNER_TEMP/kustomize-ops.log"
+          artifact="kustomize-ops-log"
+
+          set +e
+          kustomize build ops/kairos/k3s/ > /dev/null 2>"$log"
+          rc=$?
+          set -e
+
+          status=$([ $rc -eq 0 ] && echo "PASSED" || echo "FAILED")
+
+          excerpt="$(tail -n 120 "$log" 2>/dev/null || true)"
+          summary="${excerpt:-kustomize build ops/kairos/k3s/ succeeded.}"
+
+          echo "kustomize_status=$status" >> "$GITHUB_OUTPUT"
+          {
+            echo "kustomize_summary<<EOF"
+            printf '%s\n' "$summary"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          echo "kustomize_artifact=$artifact" >> "$GITHUB_OUTPUT"
+          echo "kustomize_log_path=$log" >> "$GITHUB_OUTPUT"
+
+          exit "$rc"
+
+      - name: Upload kustomize ops log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.kustomize-ops.outputs.kustomize_artifact }}
+          path: ${{ steps.kustomize-ops.outputs.kustomize_log_path }}
+          if-no-files-found: ignore
+
       - name: Install kube-linter
         shell: bash
         run: |
@@ -333,15 +381,17 @@ jobs:
 
           bootstrap_out="$RUNNER_TEMP/rendered-bootstrap.yaml"
           argocd_out="$RUNNER_TEMP/rendered-argocd.yaml"
+          ops_out="$RUNNER_TEMP/rendered-ops.yaml"
 
           kustomize build bootstrap/ >"$bootstrap_out"
           kustomize build argocd/ >"$argocd_out"
+          kustomize build ops/kairos/k3s/ >"$ops_out"
 
           log="$RUNNER_TEMP/kube-linter.log"
           artifact="kube-linter-log"
 
           set +e
-          kube-linter lint "$bootstrap_out" "$argocd_out" >"$log" 2>&1
+          kube-linter lint "$bootstrap_out" "$argocd_out" "$ops_out" >"$log" 2>&1
           rc=$?
           set -e
 
@@ -439,6 +489,7 @@ jobs:
           consider "${{ needs.static-analysis.outputs.kubeconform_status || 'SKIPPED' }}"
           consider "${{ needs.build-validation.outputs.kustomize_bootstrap_status || 'SKIPPED' }}"
           consider "${{ needs.build-validation.outputs.kustomize_argocd_status || 'SKIPPED' }}"
+          consider "${{ needs.build-validation.outputs.kustomize_ops_status || 'SKIPPED' }}"
           consider "${{ needs.build-validation.outputs.kubelinter_status || 'SKIPPED' }}"
           consider "${{ needs.deployment-readiness.outputs.crd_ordering_status || 'SKIPPED' }}"
 
@@ -479,6 +530,10 @@ jobs:
           KUSTOMIZE_ARGOCD_STATUS: ${{ needs.build-validation.outputs.kustomize_argocd_status }}
           KUSTOMIZE_ARGOCD_SUMMARY: ${{ needs.build-validation.outputs.kustomize_argocd_summary }}
           KUSTOMIZE_ARGOCD_ARTIFACT: ${{ needs.build-validation.outputs.kustomize_argocd_artifact }}
+
+          KUSTOMIZE_OPS_STATUS: ${{ needs.build-validation.outputs.kustomize_ops_status }}
+          KUSTOMIZE_OPS_SUMMARY: ${{ needs.build-validation.outputs.kustomize_ops_summary }}
+          KUSTOMIZE_OPS_ARTIFACT: ${{ needs.build-validation.outputs.kustomize_ops_artifact }}
 
           KUBELINTER_STATUS: ${{ needs.build-validation.outputs.kubelinter_status }}
           KUBELINTER_SUMMARY: ${{ needs.build-validation.outputs.kubelinter_summary }}
@@ -528,6 +583,7 @@ jobs:
             report += "\n### Layer 2: Build & Integration";
             report += section("Kustomize build (bootstrap/)", e.KUSTOMIZE_BOOTSTRAP_STATUS, e.KUSTOMIZE_BOOTSTRAP_SUMMARY, e.KUSTOMIZE_BOOTSTRAP_ARTIFACT);
             report += section("Kustomize build (argocd/)", e.KUSTOMIZE_ARGOCD_STATUS, e.KUSTOMIZE_ARGOCD_SUMMARY, e.KUSTOMIZE_ARGOCD_ARTIFACT);
+            report += section("Kustomize build (ops/kairos/k3s/)", e.KUSTOMIZE_OPS_STATUS, e.KUSTOMIZE_OPS_SUMMARY, e.KUSTOMIZE_OPS_ARTIFACT);
             report += section("kube-linter (rendered manifests)", e.KUBELINTER_STATUS, e.KUBELINTER_SUMMARY, e.KUBELINTER_ARTIFACT);
 
             report += "\n### Layer 3: Deployment Readiness";
