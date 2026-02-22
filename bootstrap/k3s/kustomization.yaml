@@ -3,4 +3,5 @@ kind: Kustomization
 
 # K3s configuration resources
 resources:
-- configure-kube-apiserver-nodeop.yaml
+  - configure-kube-apiserver-nodeop.yaml
+  - kairos-nodeopupgrade.yaml
