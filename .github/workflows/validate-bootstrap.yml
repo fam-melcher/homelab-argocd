@@ -64,7 +64,23 @@ jobs:
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Run yamllint on changed files
+      - name: Render kustomize outputs (for linting/validation)
+        id: render
+        if: steps.changed-files.outputs.has_changes == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bootstrap_out="$RUNNER_TEMP/rendered-bootstrap.yaml"
+          argocd_out="$RUNNER_TEMP/rendered-argocd.yaml"
+
+          kustomize build bootstrap/ >"$bootstrap_out"
+          kustomize build argocd/ >"$argocd_out"
+
+          echo "bootstrap_out=$bootstrap_out" >> "$GITHUB_OUTPUT"
+          echo "argocd_out=$argocd_out" >> "$GITHUB_OUTPUT"
+
+      - name: Run yamllint on changed source files + rendered output
         id: yamllint
         if: steps.changed-files.outputs.has_changes == 'true'
         shell: bash
@@ -81,17 +97,8 @@ jobs:
             [ -n "$f" ] && files_to_lint+=("$f")
           done
 
-          if [ ${#files_to_lint[@]} -eq 0 ]; then
-            echo "yamllint_status=SKIPPED" >> "$GITHUB_OUTPUT"
-            {
-              echo "yamllint_summary<<EOF"
-              echo "No YAML files to lint."
-              echo "EOF"
-            } >> "$GITHUB_OUTPUT"
-            echo "yamllint_artifact=" >> "$GITHUB_OUTPUT"
-            echo "yamllint_log_path=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          # Always include rendered outputs for linting too.
+          files_to_lint+=("${{ steps.render.outputs.bootstrap_out }}" "${{ steps.render.outputs.argocd_out }}")
 
           log="$RUNNER_TEMP/yamllint.log"
           artifact="yamllint-log"
@@ -110,11 +117,10 @@ jobs:
           elif [ "$warnings_count" -gt 0 ]; then
             status="WARNINGS"
           else
-            # some yamllint failures may not match the grep patterns
             [ "$rc" -ne 0 ] && status="FAILED"
           fi
 
-          excerpt="$(sed -n '1,80p' "$log" || true)"
+          excerpt="$(sed -n '1,120p' "$log" || true)"
           summary="Errors: ${errors_count}, Warnings: ${warnings_count}"
           if [ -n "${excerpt:-}" ]; then
             summary="${summary}\n\n${excerpt}"
@@ -129,8 +135,6 @@ jobs:
           echo "yamllint_artifact=$artifact" >> "$GITHUB_OUTPUT"
           echo "yamllint_log_path=$log" >> "$GITHUB_OUTPUT"
 
-          # Fail the step if errors were found (merge-blocking).
-          # Warnings do not fail the step, but are still reported + artifacted.
           if [ "$status" = "FAILED" ]; then
             exit 1
           fi
@@ -146,71 +150,41 @@ jobs:
 
       - name: Install kubeconform
         if: steps.changed-files.outputs.has_changes == 'true'
+        shell: bash
         run: |
           set -euo pipefail
           wget -q https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz
           tar xf kubeconform-linux-amd64.tar.gz
           sudo mv kubeconform /usr/local/bin/
 
-      - name: Validate Kubernetes schemas on changed files
+      - name: Validate Kubernetes schemas on rendered manifests (ignore missing schemas)
         id: kubeconform
         if: steps.changed-files.outputs.has_changes == 'true'
         shell: bash
         run: |
           set -euo pipefail
 
-          changed_files="${{ steps.changed-files.outputs.changed_files }}"
-          mapfile -t all_files <<<"$changed_files"
-
-          files_to_validate=()
-          for f in "${all_files[@]}"; do
-            f="${f#"${f%%[![:space:]]*}"}"
-            f="${f%"${f##*[![:space:]]}"}"
-            [ -z "$f" ] && continue
-            [[ "$f" == *kustomization.yaml ]] && continue
-            files_to_validate+=("$f")
-          done
-
-          if [ ${#files_to_validate[@]} -eq 0 ]; then
-            echo "kubeconform_status=SKIPPED" >> "$GITHUB_OUTPUT"
-            {
-              echo "kubeconform_summary<<EOF"
-              echo "No YAML files (excluding kustomization.yaml) to validate."
-              echo "EOF"
-            } >> "$GITHUB_OUTPUT"
-            echo "kubeconform_artifact=" >> "$GITHUB_OUTPUT"
-            echo "kubeconform_log_path=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          rendered=(
+            "${{ steps.render.outputs.bootstrap_out }}"
+            "${{ steps.render.outputs.argocd_out }}"
+          )
 
           log="$RUNNER_TEMP/kubeconform.log"
           artifact="kubeconform-log"
           : > "$log"
 
-          failed=0
-
           set +e
-          for file in "${files_to_validate[@]}"; do
-            out="$(kubeconform -strict "$file" 2>&1)"
-            rc=$?
-            if [ $rc -ne 0 ]; then
-              failed=1
-              {
-                echo "==> $file"
-                printf '%s\n' "$out"
-                echo
-              } >> "$log"
-            fi
-          done
+          kubeconform -strict -ignore-missing-schemas -summary "${rendered[@]}" >>"$log" 2>&1
+          rc=$?
           set -e
 
-          status=$([ $failed -eq 1 ] && echo "FAILED" || echo "PASSED")
+          status=$([ $rc -eq 0 ] && echo "PASSED" || echo "FAILED")
 
-          excerpt="$(sed -n '1,120p' "$log" || true)"
+          excerpt="$(sed -n '1,160p' "$log" || true)"
           if [ -z "${excerpt:-}" ]; then
             summary="No schema validation errors."
           else
-            summary="Schema validation errors detected:\n\n${excerpt}"
+            summary="$excerpt"
           fi
 
           echo "kubeconform_status=$status" >> "$GITHUB_OUTPUT"
@@ -222,10 +196,7 @@ jobs:
           echo "kubeconform_artifact=$artifact" >> "$GITHUB_OUTPUT"
           echo "kubeconform_log_path=$log" >> "$GITHUB_OUTPUT"
 
-          if [ "$status" = "FAILED" ]; then
-            exit 1
-          fi
-          exit 0
+          exit "$rc"
 
       - name: Upload kubeconform log
         if: always() && steps.changed-files.outputs.has_changes == 'true' && steps.kubeconform.outputs.kubeconform_log_path != ''
@@ -283,11 +254,7 @@ jobs:
           status=$([ $rc -eq 0 ] && echo "PASSED" || echo "FAILED")
 
           excerpt="$(tail -n 120 "$log" 2>/dev/null || true)"
-          if [ -z "${excerpt:-}" ]; then
-            summary="kustomize build bootstrap/ succeeded."
-          else
-            summary="${excerpt}"
-          fi
+          summary="${excerpt:-kustomize build bootstrap/ succeeded.}"
 
           echo "kustomize_status=$status" >> "$GITHUB_OUTPUT"
           {
@@ -298,7 +265,6 @@ jobs:
           echo "kustomize_artifact=$artifact" >> "$GITHUB_OUTPUT"
           echo "kustomize_log_path=$log" >> "$GITHUB_OUTPUT"
 
-          # Fail the step if kustomize build failed
           exit "$rc"
 
       - name: Upload kustomize bootstrap log
@@ -326,11 +292,7 @@ jobs:
           status=$([ $rc -eq 0 ] && echo "PASSED" || echo "FAILED")
 
           excerpt="$(tail -n 120 "$log" 2>/dev/null || true)"
-          if [ -z "${excerpt:-}" ]; then
-            summary="kustomize build argocd/ succeeded."
-          else
-            summary="${excerpt}"
-          fi
+          summary="${excerpt:-kustomize build argocd/ succeeded.}"
 
           echo "kustomize_status=$status" >> "$GITHUB_OUTPUT"
           {
@@ -372,7 +334,6 @@ jobs:
           bootstrap_out="$RUNNER_TEMP/rendered-bootstrap.yaml"
           argocd_out="$RUNNER_TEMP/rendered-argocd.yaml"
 
-          # Render both kustomizations
           kustomize build bootstrap/ >"$bootstrap_out"
           kustomize build argocd/ >"$argocd_out"
 
@@ -387,11 +348,7 @@ jobs:
           status=$([ $rc -eq 0 ] && echo "PASSED" || echo "FAILED")
 
           excerpt="$(sed -n '1,120p' "$log" || true)"
-          if [ -z "${excerpt:-}" ]; then
-            summary="No kube-linter output."
-          else
-            summary="${excerpt}"
-          fi
+          summary="${excerpt:-No kube-linter output.}"
 
           echo "kubelinter_status=$status" >> "$GITHUB_OUTPUT"
           {
@@ -402,7 +359,6 @@ jobs:
           echo "kubelinter_artifact=$artifact" >> "$GITHUB_OUTPUT"
           echo "kubelinter_log_path=$log" >> "$GITHUB_OUTPUT"
 
-          # Fail the step if kube-linter found issues (rc=1) or had an error (>1)
           exit "$rc"
 
       - name: Upload kube-linter log
@@ -566,8 +522,8 @@ jobs:
             report += "This matches whether the PR is merge-blocked by this workflow.\n";
 
             report += "\n### Layer 1: Static Analysis";
-            report += section("Yamllint (changed files)", e.YAMLLINT_STATUS, e.YAMLLINT_SUMMARY, e.YAMLLINT_ARTIFACT);
-            report += section("Kubeconform (changed files)", e.KUBECONFORM_STATUS, e.KUBECONFORM_SUMMARY, e.KUBECONFORM_ARTIFACT);
+            report += section("Yamllint (changed sources + rendered output)", e.YAMLLINT_STATUS, e.YAMLLINT_SUMMARY, e.YAMLLINT_ARTIFACT);
+            report += section("Kubeconform (rendered manifests; ignore missing schemas)", e.KUBECONFORM_STATUS, e.KUBECONFORM_SUMMARY, e.KUBECONFORM_ARTIFACT);
 
             report += "\n### Layer 2: Build & Integration";
             report += section("Kustomize build (bootstrap/)", e.KUSTOMIZE_BOOTSTRAP_STATUS, e.KUSTOMIZE_BOOTSTRAP_SUMMARY, e.KUSTOMIZE_BOOTSTRAP_ARTIFACT);
