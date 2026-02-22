@@ -7,6 +7,7 @@ rules:
     level: warning
   indentation:
     spaces: 2
+    indent-sequences: whatever
   comments:
     min-spaces-from-content: 2
   truthy:
