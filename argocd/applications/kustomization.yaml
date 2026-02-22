@@ -5,6 +5,7 @@ kind: Kustomization
 resources:
   - bootstrap-application.yaml
   - kairos-operator-application.yaml
+  - kairos-ops-application.yaml
 
 labels:
   - pairs:

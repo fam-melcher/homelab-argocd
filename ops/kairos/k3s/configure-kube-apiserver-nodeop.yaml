@@ -17,24 +17,24 @@ spec:
 
   # Commands to configure k3s API server settings
   command:
-  - sh
-  - -c
-  - |
-    set -e
+    - sh
+    - -c
+    - |
+      set -e
 
-    # Create k3s config directory and drop-in folder
-    mkdir -p /host/etc/rancher/k3s/config.yaml.d
+      # Create k3s config directory and drop-in folder
+      mkdir -p /host/etc/rancher/k3s/config.yaml.d
 
-    # Create infrastructure configuration file
-    cat > /host/etc/rancher/k3s/config.yaml.d/20-infrastructure.yaml <<'EOF'
-    kube-apiserver-arg:
-      - enable-admission-plugins=NamespaceLifecycle,ResourceQuota
-    disable:
-      - traefik
-      - servicelb
-    EOF
+      # Create infrastructure configuration file
+      cat > /host/etc/rancher/k3s/config.yaml.d/20-infrastructure.yaml <<'EOF'
+      kube-apiserver-arg:
+        - enable-admission-plugins=NamespaceLifecycle,ResourceQuota
+      disable:
+        - traefik
+        - servicelb
+      EOF
 
-    sync
+      sync
   # Path where the node's root filesystem is mounted
   hostMountPath: /host
 

@@ -1,7 +1,7 @@
 apiVersion: operator.kairos.io/v1alpha1
 kind: NodeOpUpgrade
 metadata:
-  name: kairos-upgrade
+  name: kairos-upgrade-2026-02-22
   namespace: default
 spec:
   image: quay.io/kairos/ubuntu:24.04-standard-amd64-generic-v3.7.2-k3s-v1.33.7-k3s3
