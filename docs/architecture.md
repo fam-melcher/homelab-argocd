@@ -45,29 +45,45 @@ spec:
 
 ### 2. K3s Configuration (`bootstrap/k3s/`)
 
-**Purpose:** Configure K3s-specific settings required for cluster operation.
+**Purpose:** Configure K3s-specific settings and manage Kairos OS upgrades.
 
 **Current contents:**
 
-- K3s API server node operator configuration
-- Sets K3s-specific admission plugins and API server flags
+- K3s API server node operator configuration - Sets K3s-specific admission plugins and API server flags
+- Kairos NodeOpUpgrade resource - Declarative OS and K3s upgrades on Kairos nodes
 
-**Why important:** K3s is the distribution used by Kairos OS. This component ensures K3s API server is configured according to bootstrap requirements.
+**Why important:** K3s is the distribution used by Kairos OS. This component ensures K3s API server is configured according to bootstrap requirements and provides a GitOps mechanism for cluster-wide OS upgrades.
 
-**Example configuration:**
+**K3s API Server Configuration (NodeOp):**
 
 ```yaml
-apiVersion: kairos.io/v1
+apiVersion: operator.kairos.io/v1alpha1
 kind: NodeOp
 metadata:
   name: configure-kube-apiserver
 spec:
   nodeSelector:
     node-role.kubernetes.io/control-plane: ""
-  sequence:
-    - name: kube-apiserver-config
-      # K3s API server configuration applied via systemd/kubelet service
+  # Configuration that NodeOp controller will apply to matching nodes
 ```
+
+**OS Upgrade Configuration (NodeOpUpgrade):**
+
+```yaml
+apiVersion: operator.kairos.io/v1alpha1
+kind: NodeOpUpgrade
+metadata:
+  name: kairos-upgrade
+spec:
+  image: quay.io/kairos/ubuntu:24.04-standard-amd64-generic-v3.7.2-k3s-v1.33.7-k3s3
+  nodeSelector:
+    matchLabels:
+      kubernetes.io/arch: amd64
+  concurrency: 1
+  stopOnFailure: true
+```
+
+NodeOpUpgrade allows GitOps-driven OS and K3s version management. When updated in this repo and synced by ArgoCD, all matching nodes automatically upgrade in a controlled manner.
 
 ### 3. Pod Security (`bootstrap/security/`)
 

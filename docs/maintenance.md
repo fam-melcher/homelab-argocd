@@ -46,12 +46,71 @@ cat bootstrap/security/k3s-pod-security-nodeop.yaml
 
 ## Updating Components
 
+### Upgrading Kairos OS and K3s (NodeOpUpgrade)
+
+**GitOps-driven OS upgrades via NodeOpUpgrade resource:**
+
+The `bootstrap/k3s/kairos-nodeopupgrade.yaml` resource provides a declarative way to upgrade Kairos OS and K3s on your cluster nodes.
+
+**To perform an OS/K3s upgrade:**
+
+1. **Check available versions:**
+
+   ```bash
+   # Use the release checker script to see all available Kairos images
+   bash scripts/check-kairos-releases.sh
+   ```
+
+   This script:
+   - Queries GitHub for the latest Kairos release
+   - Extracts available distributions from ISO asset names
+   - Fetches tags from Quay.io API for each distribution
+   - Displays all variants with Kairos and Kubernetes versions
+   - Shows complete Quay URLs ready to copy into manifests
+
+2. **Update the image in bootstrap/k3s/kairos-nodeopupgrade.yaml:**
+
+   ```yaml
+   apiVersion: operator.kairos.io/v1alpha1
+   kind: NodeOpUpgrade
+   metadata:
+     name: kairos-upgrade
+   spec:
+     image: quay.io/kairos/ubuntu:24.04-standard-amd64-generic-v3.7.2-k3s-v1.33.7-k3s3  # Update this
+     nodeSelector:
+       matchLabels:
+         kubernetes.io/arch: amd64
+     concurrency: 1  # Upgrade one node at a time
+     stopOnFailure: true  # Stop if any node fails
+   ```
+
+3. **Push to your feature branch:**
+
+   ```bash
+   git checkout -b chore/upgrade-kairos-to-vX-Y-Z
+   # Edit bootstrap/k3s/kairos-nodeopupgrade.yaml
+   git add ./bootstrap/k3s/kairos-nodeopupgrade.yaml
+   git commit -m "chore: upgrade Kairos OS and K3s to vX.Y.Z"
+   git push origin chore/upgrade-kairos-to-vX-Y-Z
+   ```
+
+4. **Create PR and merge to main**
+
+5. **ArgoCD automatically applies the upgrade** - All matching nodes will upgrade according to the concurrency and failure settings.
+
+**Important upgrade considerations:**
+
+- `concurrency: 1` - Only upgrade one node at a time for high availability
+- `stopOnFailure: true` - Stop upgrading if any node fails to prevent cluster instability
+- Always test in staging first if possible
+- Monitor node status during upgrades: `kubectl get nodes -w`
+- Check node events: `kubectl describe node <node-name>`
+
 ### Step 1: Plan the Update
 
 1. **Check release notes:**
+   - <https://github.com/kairos-io/kairos/releases>
    - <https://github.com/argoproj/argo-cd/releases>
-   - <https://github.com/envoyproxy/gateway/releases>
-   - <https://github.com/kubernetes-sigs/gateway-api/releases>
 
 2. **Identify breaking changes:**
    - API changes requiring CRD updates?
@@ -59,7 +118,7 @@ cat bootstrap/security/k3s-pod-security-nodeop.yaml
    - Required migration steps?
 
 3. **Test in staging first!**
-   - Create staging branch: `git checkout -b chore/test-upgrade-envoy-gateway-v1-5`
+   - Create staging branch: `git checkout -b chore/test-upgrade-kairos-vX-Y-Z`
    - Update manifests
    - Deploy to staging cluster
    - Verify functionality
@@ -79,7 +138,7 @@ cat bootstrap/security/k3s-pod-security-nodeop.yaml
 
    ```bash
    # Check Kairos releases for updated NodeOp CRDs
-   curl https://raw.githubusercontent.com/kairos-io/kairos/main/pkg/operators/nodeop/crd.yaml -o nodeop-crd-new.yaml
+   curl https://raw.githubusercontent.com/kairos-io/kairos-operator/main/config/crd/bases/operator.kairos.io_nodeops.yaml -o nodeop-crd-new.yaml
 
    # Compare with current version
    diff bootstrap/crds/nodeop-crd.yaml nodeop-crd-new.yaml
@@ -98,6 +157,8 @@ cat bootstrap/security/k3s-pod-security-nodeop.yaml
    # Pod security configuration
    grep -r "image:" bootstrap/security/
    # Update image tags to new versions
+
+```
    ```
 
 ### Step 3: Test Update
