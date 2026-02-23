@@ -46,6 +46,7 @@ spec:
           warn: "restricted"
         exemptions:
           namespaces:
+          - default
           - kube-system
           - kube-public
           - kube-node-lease
