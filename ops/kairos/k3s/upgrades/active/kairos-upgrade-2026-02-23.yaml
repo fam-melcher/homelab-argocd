@@ -1,0 +1,24 @@
+apiVersion: operator.kairos.io/v1alpha1
+kind: NodeOpUpgrade
+metadata:
+  name: kairos-upgrade-2026-02-23
+  namespace: default
+spec:
+  image: quay.io/kairos/ubuntu:24.04-standard-amd64-generic-v3.7.2-k3s-v1.35.0-k3s3
+
+  nodeSelector:
+    matchLabels:
+      kubernetes.io/arch: amd64
+      kairos.io/managed: "true"
+
+  concurrency: 1
+  stopOnFailure: true
+
+  # Whether to upgrade the active partition (defaults to true)
+  upgradeActive: true
+
+  # Whether to upgrade the recovery partition (defaults to false)
+  upgradeRecovery: false
+
+  # Whether to force the upgrade without version checks
+  force: false
