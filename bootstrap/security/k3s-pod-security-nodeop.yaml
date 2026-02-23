@@ -39,7 +39,7 @@ spec:
     - name: PodSecurity
       configuration:
         apiVersion: pod-security.admission.config.k8s.io/v1
-        kind: PodSecurityAdmissionConfiguration
+        kind: PodSecurityConfiguration
         defaults:
           enforce: "restricted"
           audit: "restricted"
