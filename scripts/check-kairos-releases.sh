@@ -1,7 +1,11 @@
 #!/bin/bash
 #
 # Check Kairos releases from Quay.io - categorized by distribution/variant/arch
-# Usage: ./check-kairos-releases.sh
+# Usage: ./check-kairos-releases.sh [distro]
+#
+# Notes:
+# - Quay tag API is paginated; this script fetches all pages.
+# - Optionally pass a single distro (e.g., 'ubuntu') to limit output.
 #
 
 # Get asset names from latest GitHub release and extract unique distributions
@@ -15,6 +19,9 @@ echo "Kairos Releases from Quay.io"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
+# Optional distro filter (exact match on distro name as printed by this script)
+distro_filter="${1:-}"
+
 # Function to map distribution names (GitHub asset) to Quay repository names
 get_quay_repo() {
   case "$1" in
@@ -23,19 +30,40 @@ get_quay_repo() {
   esac
 }
 
+# Fetch all tags from Quay (API is paginated)
+fetch_all_tags() {
+  local repo="$1"
+  local page=1
+  local limit=100
+  local response has_additional
+
+  while true; do
+    response=$(curl -sS "https://quay.io/api/v1/repository/kairos/${repo}/tag/?onlyActiveTags=true&page=${page}&limit=${limit}")
+
+    if ! echo "$response" | jq -e '.tags' > /dev/null 2>&1; then
+      break
+    fi
+
+    echo "$response" | jq -r '.tags[] | select(.name | endswith(".sig") | not) | .name'
+
+    has_additional=$(echo "$response" | jq -r '.has_additional // false')
+    if [ "$has_additional" != "true" ]; then
+      break
+    fi
+
+    page=$((page + 1))
+  done
+}
+
 # For each distribution, fetch tags from Quay.io
 for distro in $distributions; do
+  if [ -n "$distro_filter" ] && [ "$distro" != "$distro_filter" ]; then
+    continue
+  fi
   # Map distribution name to Quay repository name
   quay_repo=$(get_quay_repo "$distro")
 
-  response=$(curl -sS "https://quay.io/api/v1/repository/kairos/$quay_repo/tag/?onlyActiveTags=true")
-
-  # Check if repository exists (has 'tags' key) before processing
-  if echo "$response" | jq -e '.tags' > /dev/null 2>&1; then
-    tags=$(echo "$response" | jq -r '.tags[] | select(.name | endswith(".sig") | not) | .name' | sort)
-  else
-    tags=""
-  fi
+  tags=$(fetch_all_tags "$quay_repo" | sort -u)
 
   if [ -z "$tags" ]; then
     echo "Distribution:  $distro [no tags found]"
