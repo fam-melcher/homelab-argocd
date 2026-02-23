@@ -1,9 +1,9 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# Kairos operational resources - managed by the kairos-ops ArgoCD Application (manual-sync)
-# NodeOp and NodeOpUpgrade resources are NOT continuously reconciled; they are applied
-# on-demand by triggering a manual sync in ArgoCD.
+# Kairos operational resources (NodeOps) - managed by the kairos-ops ArgoCD Application (manual-sync)
+# Note: Upgrades are managed separately by the kairos-upgrades ArgoCD Application to reduce
+# the chance of concurrent reboots across different operations.
 resources:
   - configure-kube-apiserver-nodeop.yaml
-  - upgrades/active/
+  - k3s-pod-security-nodeop.yaml

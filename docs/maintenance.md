@@ -41,7 +41,7 @@ grep "apiVersion:" bootstrap/crds/nodeop-crd.yaml
 grep -i "image:" ops/kairos/k3s/*.yaml ops/kairos/k3s/upgrades/active/*.yaml
 
 # Pod security configuration
-cat bootstrap/security/k3s-pod-security-nodeop.yaml
+cat ops/kairos/k3s/k3s-pod-security-nodeop.yaml
 ```
 
 ## Updating Components
@@ -51,9 +51,17 @@ cat bootstrap/security/k3s-pod-security-nodeop.yaml
 **GitOps-driven OS upgrades via immutable NodeOpUpgrade manifests:**
 
 Upgrade manifests live under `ops/kairos/k3s/upgrades/` and are managed by the
-`kairos-ops` ArgoCD Application (manual-sync). Only manifests in
+`kairos-upgrades` ArgoCD Application (manual-sync). Only manifests in
 `upgrades/active/` are applied; `upgrades/archive/` preserves completed upgrades
 for audit purposes.
+
+#### Avoid concurrent reboots
+
+Kairos `NodeOp` and `NodeOpUpgrade` resources can both cordon/drain and reboot nodes.
+There is no global lock between different operations.
+
+- Sync `kairos-ops` (NodeOps) and `kairos-upgrades` (upgrades) separately.
+- Wait for the first operation to finish before starting the next.
 
 **Upgrade lifecycle:**
 
@@ -118,11 +126,11 @@ for audit purposes.
 
 6. **Merge to main.**
 
-7. **Manually trigger the `kairos-ops` ArgoCD Application sync** — ArgoCD will
+7. **Manually trigger the `kairos-upgrades` ArgoCD Application sync** — ArgoCD will
    apply the new NodeOpUpgrade. All matching nodes will upgrade in a controlled
    manner according to `concurrency` and `stopOnFailure` settings.
 
-> **Important:** The `kairos-ops` Application is **manual-sync only**. ArgoCD
+> **Important:** The `kairos-upgrades` Application is **manual-sync only**. ArgoCD
 > will NOT automatically apply upgrades. You must trigger the sync explicitly.
 
 **Why immutable manifests?**
@@ -133,7 +141,7 @@ archiving completed upgrades, each upgrade run maps to a distinct commit in git.
 
 **On a new cluster:**
 
-When bootstrapping a new cluster, the `kairos-ops` Application will see the
+When bootstrapping a new cluster, the `kairos-upgrades` Application will see the
 current `upgrades/active/` manifest as out-of-sync. You can trigger a manual
 sync to apply the upgrade, or skip it if the cluster is already on the target
 version.

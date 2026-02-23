@@ -48,24 +48,28 @@ spec:
 **Purpose:** Configure K3s-specific settings and manage Kairos OS upgrades.
 These resources are **operational** — they are not continuously reconciled by
 the bootstrap Application. They are applied on-demand via the `kairos-ops`
-ArgoCD Application (manual-sync).
+ArgoCD Application (manual-sync). Upgrades are applied on-demand via the
+`kairos-upgrades` ArgoCD Application (manual-sync).
 
 **Current contents:**
 
 - `configure-kube-apiserver-nodeop.yaml` — K3s API server node operator
   configuration. Sets K3s-specific admission plugins and API server flags.
-- `upgrades/active/` — The single active immutable NodeOpUpgrade manifest.
-  Only one upgrade should reside here at a time.
-- `upgrades/archive/` — Completed upgrade manifests preserved for audit/rollback
-  reference. Not referenced by the kustomization and not applied by ArgoCD.
+- `k3s-pod-security-nodeop.yaml` — Pod Security Admission configuration for
+  control-plane nodes (NodeOp).
+- `upgrades/` — Upgrade entrypoint managed by `kairos-upgrades`.
+  - `upgrades/active/` — The single active immutable NodeOpUpgrade manifest.
+    Only one upgrade should reside here at a time.
+  - `upgrades/archive/` — Completed upgrade manifests preserved for audit/rollback
+    reference. Not referenced by the kustomization and not applied by ArgoCD.
 
 **Why separate from bootstrap?**
 
 NodeOp and NodeOpUpgrade resources are one-shot operations that cordon, drain,
 and reboot nodes. Placing them in a continuously-reconciled Application
 (prune + selfHeal) risks unintended re-runs on every sync. The `kairos-ops`
-Application is manual-sync only, giving operators explicit control over when
-upgrades are applied.
+and `kairos-upgrades` Applications are manual-sync only, giving operators explicit
+control over when disruptive actions run.
 
 **K3s API Server Configuration (NodeOp):**
 
@@ -100,18 +104,16 @@ Each upgrade is a new manifest with a date-based name. The previous manifest is
 moved to `upgrades/archive/` and a new manifest is placed in `upgrades/active/`.
 This ensures each upgrade run corresponds to a distinct commit in git history.
 
-**On a new cluster:** The `kairos-ops` Application will be out-of-sync on first
-bootstrap. Trigger a manual sync to apply the NodeOp configuration and the
-current active upgrade, or skip if the cluster is already on the target version.
+**On a new cluster:** The `kairos-ops` and `kairos-upgrades` Applications may be
+out-of-sync on first bootstrap. Trigger manual syncs as needed, and avoid running
+NodeOps and upgrades concurrently.
 
-### 3. Pod Security (`bootstrap/security/`)
+### 3. Pod Security (operational NodeOp)
 
 **Purpose:** Define pod security policies and admission controls.
 
-**Current contents:**
-
-- Pod Security admission plugin configuration for control plane nodes
-- Uses Kairos NodeOp to deploy pod security policies
+Pod Security Admission configuration is deployed to control-plane nodes via a
+Kairos `NodeOp` under `ops/kairos/k3s/` and applied on-demand via `kairos-ops`.
 
 **Why important:** Controls which pods can run on the cluster based on security policies.
 
@@ -160,10 +162,12 @@ spec:
 │                                              │
 │  bootstrap/ (automated, prune+selfHeal):     │
 │  1. CRDs (Kairos NodeOp)                     │
-│  2. Pod Security Configuration               │
+│  2. Security bootstrap resources             │
 │                                              │
 │  ops/kairos/k3s/ (MANUAL SYNC ONLY):         │
-│  3. K3s API Server NodeOp                    │
+│  3. K3s NodeOps (API server, pod security)   │
+│                                              │
+│  ops/kairos/k3s/upgrades/ (MANUAL SYNC ONLY):│
 │  4. Active Kairos OS/K3s NodeOpUpgrade       │
 └──────────────────────────────────────────────┘
            ↓
@@ -185,8 +189,10 @@ Bootstrap components are applied in strict order via `bootstrap/kustomization.ya
 Operational resources (`ops/kairos/k3s/`) are applied separately via the
 `kairos-ops` ArgoCD Application (manual-sync only):
 
-3. **K3s API server NodeOp** - Configures API server and cluster networking
-4. **Active NodeOpUpgrade** - Upgrades Kairos OS and K3s to the pinned version
+1. **K3s API server NodeOp** - Configures API server and cluster networking
+2. **Active NodeOpUpgrade** - Upgrades Kairos OS and K3s to the pinned version
+
+Upgrades are applied via the `kairos-upgrades` ArgoCD Application (manual-sync only).
 
 **Why order matters:**
 
@@ -207,14 +213,16 @@ bootstrap/
 │   └── nodeop-crd.yaml
 └── security/
     ├── kustomization.yaml
-    └── k3s-pod-security-nodeop.yaml
+  # (security bootstrap resources)
 
 ops/
 └── kairos/
     └── k3s/
         ├── kustomization.yaml
         ├── configure-kube-apiserver-nodeop.yaml
+    ├── k3s-pod-security-nodeop.yaml
         └── upgrades/
+      ├── kustomization.yaml
             ├── active/
             │   ├── kustomization.yaml
             │   └── kairos-upgrade-YYYY-MM-DD.yaml   # single active upgrade
@@ -228,7 +236,8 @@ argocd/
     ├── kustomization.yaml
     ├── bootstrap-application.yaml
     ├── kairos-operator-application.yaml
-    └── kairos-ops-application.yaml
+  ├── kairos-ops-application.yaml
+  └── kairos-upgrades-application.yaml
 ```
 
 **Kustomize benefits:**
@@ -276,7 +285,13 @@ The bootstrap process is driven by ArgoCD Applications:
 
 - Points to `ops/kairos/k3s/` directory
 - **Manual-sync only** — no `automated` policy, no prune, no selfHeal
-- Applies NodeOp and NodeOpUpgrade resources on-demand
+- Applies NodeOp resources on-demand
+
+**Kairos Upgrades Application** (`argocd/applications/kairos-upgrades-application.yaml`):
+
+- Points to `ops/kairos/k3s/upgrades/` directory
+- **Manual-sync only** — no `automated` policy, no prune, no selfHeal
+- Applies the active NodeOpUpgrade on-demand
 
 **Automatic Sync Policies (bootstrap):**
 
