@@ -7,4 +7,3 @@ kind: Kustomization
 resources:
   - configure-kube-apiserver-nodeop.yaml
   - k3s-pod-security-nodeop.yaml
-  - upgrades/active/

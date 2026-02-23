@@ -6,6 +6,7 @@ resources:
   - bootstrap-application.yaml
   - kairos-operator-application.yaml
   - kairos-ops-application.yaml
+  - kairos-upgrades-application.yaml
 
 labels:
   - pairs:
