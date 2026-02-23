@@ -49,6 +49,7 @@ spec:
           - kube-system
           - kube-public
           - kube-node-lease
+          - kairos-operator
           - argocd
     EOF
 
