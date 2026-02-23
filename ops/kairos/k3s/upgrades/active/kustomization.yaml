@@ -3,4 +3,4 @@ kind: Kustomization
 
 # Active upgrade manifests - only one upgrade should be active at a time
 resources:
-  - kairos-upgrade-2026-02-22.yaml
+  - kairos-upgrade-2026-02-23.yaml
