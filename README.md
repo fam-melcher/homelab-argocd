@@ -20,7 +20,6 @@ ArgoCD syncs from this repository
 Bootstrap components installed:
   - CRDs
   - Storage Classes
-  - Gateway API
   - Envoy Gateway
   - Networking (network policies, etc.)
 ```
@@ -33,7 +32,6 @@ homelab-argocd/
 ├── bootstrap/
 │   ├── crds/                        # Custom Resource Definitions
 │   ├── storage/                     # StorageClasses and PersistentVolume setup
-│   ├── gateway-api/                 # Kubernetes Gateway API installation
 │   ├── envoy-gateway/               # Envoy Gateway operator & configuration
 │   └── networking/                  # NetworkPolicies, CNI configs
 ├── docs/                            # Project documentation
@@ -101,10 +99,6 @@ Custom Resource Definitions required by other bootstrap components.
 ### Storage (`bootstrap/storage/`)
 
 StorageClasses for persistent storage. Configure based on your infrastructure.
-
-### Gateway API (`bootstrap/gateway-api/`)
-
-Kubernetes Gateway API CRDs and controllers. Foundation for Envoy Gateway.
 
 ### Envoy Gateway (`bootstrap/envoy-gateway/`)
 
