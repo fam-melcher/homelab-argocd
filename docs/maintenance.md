@@ -323,12 +323,14 @@ git checkout main && git pull
 git checkout -b chore/update-envoy-gateway-crd-v1.6
 
 # Update CRD
-curl https://raw.githubusercontent.com/envoyproxy/gateway/v1.6.0/config/crd/core_gateway.yaml -o bootstrap/gateway-api/envoy-gateway-crd-v1.6.0.yaml
+# NOTE: CRDs are kept under bootstrap/crds/ so they are applied before controllers/CRs.
+curl https://raw.githubusercontent.com/envoyproxy/gateway/v1.6.0/config/crd/core_gateway.yaml \
+   -o bootstrap/crds/envoy-gateway/envoy-gateway-crds.yaml
 
 # Update default EnvoyGateway resource if needed
 # Review bootstrap/envoy-gateway/envoygateway.yaml
 
-git add bootstrap/
+git add ./bootstrap/crds/envoy-gateway/envoy-gateway-crds.yaml
 git commit -m "chore: update envoy-gateway crds to v1.6.0"
 ```
 

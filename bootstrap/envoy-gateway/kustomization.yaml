@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - envoy-gateway-controller.yaml
+  - gatewayclass.yaml
+  - gateway.yaml
+
+patches:
+  - path: patch-envoy-gateway-deployment.yaml
+    target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: envoy-gateway
+      namespace: envoy-gateway-system
+  - path: patch-envoy-gateway-certgen-job.yaml
+    target:
+      group: batch
+      version: v1
+      kind: Job
+      name: eg-gateway-helm-certgen
+      namespace: envoy-gateway-system
+
+labels:
+  - pairs:
+      managed-by: argocd
+      component: envoy-gateway

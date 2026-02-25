@@ -115,12 +115,24 @@ kubectl get applications -n argocd -w
 # Verify CRDs are installed
 kubectl get crd | grep nodeop
 
+# Verify Gateway API CRDs are installed
+kubectl get crd | grep gateway.networking.k8s.io
+
+# Verify Envoy Gateway is running
+kubectl get pods -n envoy-gateway-system
+
+# Verify the GatewayClass and default Gateway exist
+kubectl get gatewayclass
+kubectl get gateway -A
+
 # Check that bootstrap components are deployed
 kubectl get nodes -o wide  # Should show K3s configuration applied
 
 # Verify pod security is enforced
 kubectl get pods -A  # Should show security context applied
 ```
+
+Note: the default Envoy Gateway Service is typically `LoadBalancer`. If you have disabled K3s `servicelb` (as this repo does) you will need an alternative load balancer implementation (for example MetalLB) for an external IP.
 
 ## Troubleshooting
 
