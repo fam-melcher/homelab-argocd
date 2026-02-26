@@ -19,9 +19,9 @@ ArgoCD syncs from this repository
     ↓
 Bootstrap components installed:
   - CRDs
-  - Storage Classes
   - Envoy Gateway
-  - Networking (network policies, etc.)
+  - Security bootstrap resources
+  - MetalLB (installed via ArgoCD Helm Application)
 ```
 
 ## Repository Structure
@@ -31,16 +31,17 @@ homelab-argocd/
 ├── argocd/                          # ArgoCD installation & configuration
 ├── bootstrap/
 │   ├── crds/                        # Custom Resource Definitions
-│   ├── storage/                     # StorageClasses and PersistentVolume setup
 │   ├── envoy-gateway/               # Envoy Gateway operator & configuration
-│   └── networking/                  # NetworkPolicies, CNI configs
+│   └── security/                    # Security bootstrap resources
+├── ops/
+│   ├── kairos/                      # Kairos NodeOps (manual sync; can reboot)
+│   └── metallb/                     # MetalLB address pool config (no reboot)
 ├── docs/                            # Project documentation
 └── README.md                        # This file
 ```
 
 ## Prerequisites
 
-- Kairos OS cluster with MetalLB installed
 - Terraform setup to deploy ArgoCD
 - kubectl access to the cluster
 - Git configured for SSH or HTTPS
@@ -71,14 +72,14 @@ kubectl get applications -n argocd -w
 ### 3. Verify Bootstrap Components
 
 ```bash
-# Check StorageClasses
-kubectl get storageclass
-
 # Check Gateway API resources
 kubectl api-resources | grep gateway
 
 # Check Envoy Gateway
 kubectl get envoygateway -n envoy-gateway-system
+
+# Check MetalLB
+kubectl get pods -n metallb-system
 ```
 
 ## Documentation
@@ -96,17 +97,20 @@ See [docs/](docs/) for:
 
 Custom Resource Definitions required by other bootstrap components.
 
-### Storage (`bootstrap/storage/`)
+### MetalLB (`argocd/applications/metallb-application.yaml`)
 
-StorageClasses for persistent storage. Configure based on your infrastructure.
+MetalLB is installed via an ArgoCD Helm Application (pinned chart version).
+The address pool is configured separately under `ops/metallb/`.
 
 ### Envoy Gateway (`bootstrap/envoy-gateway/`)
 
 API gateway and ingress controller using Envoy.
 
-### Networking (`bootstrap/networking/`)
+### Ops MetalLB config (`ops/metallb/`)
 
-MetalLB configuration, network policies, and networking setup.
+Site-specific address pool configuration (for example L2 IP ranges).
+Applied by the dedicated ArgoCD Application `metallb-config` so syncing it won’t
+re-run Kairos NodeOps/upgrades.
 
 ## Development Workflow
 
