@@ -1,21 +1,27 @@
 # MetalLB configuration (site-specific)
 
-This folder is applied by the ArgoCD Application `metallb-config`.
+MetalLB *installation* is handled separately (via the ArgoCD Helm Application).
+This folder contains the site/cluster-specific MetalLB CRs (like `IPAddressPool`).
 
-It is intentionally empty by default to avoid accidentally advertising the wrong
-IP range on your LAN.
+## Kustomize layout
 
-## What you need to provide
+- `ops/metallb/base/` defines the common objects.
+- `ops/metallb/overlays/<cluster>/` patches only what differs per cluster.
 
-For L2 mode, add at least:
+For example, the `devbox` overlay patches only `spec.addresses`.
 
-- `ipaddresspool.yaml` (your safe, non-DHCP range)
-- `l2advertisement.yaml`
+## Add a new cluster
 
-Then reference them in `ops/metallb/kustomization.yaml`.
+1. Copy the overlay folder:
+
+- `ops/metallb/overlays/devbox/` → `ops/metallb/overlays/<newcluster>/`
+
+2. Update `ipaddresspool-addresses.yaml` with your LAN range.
+3. Add a new element in the `metallb-config` ApplicationSet generator.
 
 ## Safety note (no reboots)
 
 This is a dedicated ArgoCD application that only applies MetalLB CRs. It does
 **not** touch Kairos `NodeOp` or `NodeOpUpgrade` resources, so syncing it won’t
 reboot nodes.
+
