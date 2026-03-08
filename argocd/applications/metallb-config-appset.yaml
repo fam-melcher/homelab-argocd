@@ -1,0 +1,30 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: metallb-config
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "20"
+spec:
+  generators:
+    - list:
+        elements:
+          - name: devbox
+            server: https://192.168.1.47:6443
+            path: ops/metallb/overlays/devbox
+  template:
+    metadata:
+      name: metallb-config-{{name}}
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/fam-melcher/homelab-argocd.git
+        targetRevision: main
+        path: '{{path}}'
+      destination:
+        server: '{{server}}'
+        namespace: metallb-system
+      syncPolicy:
+        syncOptions:
+          - CreateNamespace=true
+          - ApplyOutOfSyncOnly=true

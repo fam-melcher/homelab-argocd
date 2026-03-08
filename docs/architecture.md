@@ -43,6 +43,20 @@ spec:
   # Configuration that NodeOp controller will apply to matching nodes
 ```
 
+### MetalLB (`argocd/applications/metallb-application.yaml`)
+
+**Purpose:** Provide a bare-metal `LoadBalancer` implementation (required because K3s `servicelb` is disabled).
+
+**Installed by:** The automated `metallb` ArgoCD Application (Helm chart).
+
+**Configuration:** Site-specific address pools are *not* defined in bootstrap; they live under `ops/metallb/`.
+
+### MetalLB configuration (`ops/metallb/`)
+
+**Purpose:** Define `IPAddressPool` / `L2Advertisement` (or BGP resources) for your LAN.
+
+**Safety:** This folder is applied via a dedicated `metallb-config` ArgoCD Application so syncing MetalLB configuration does not re-apply Kairos `NodeOp` or `NodeOpUpgrade` resources (which can cordon/drain and reboot nodes).
+
 ### 2. K3s Configuration (`ops/kairos/k3s/`)
 
 **Purpose:** Configure K3s-specific settings and manage Kairos OS upgrades.

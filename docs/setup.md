@@ -132,7 +132,7 @@ kubectl get nodes -o wide  # Should show K3s configuration applied
 kubectl get pods -A  # Should show security context applied
 ```
 
-Note: the default Envoy Gateway Service is typically `LoadBalancer`. If you have disabled K3s `servicelb` (as this repo does) you will need an alternative load balancer implementation (for example MetalLB) for an external IP.
+Note: the default Envoy Gateway Service is typically `LoadBalancer`. This repo disables K3s `servicelb`, so it installs MetalLB via an ArgoCD Helm Application (pinned chart version). You still need to configure a site-specific address pool under `ops/metallb/`.
 
 ## Troubleshooting
 
