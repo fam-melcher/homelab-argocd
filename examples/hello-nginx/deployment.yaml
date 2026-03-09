@@ -53,7 +53,19 @@ spec:
               mountPath: /usr/share/nginx/html/index.html
               subPath: index.html
               readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            - name: cache
+              mountPath: /var/cache/nginx
+            - name: run
+              mountPath: /var/run
       volumes:
         - name: html
           configMap:
             name: hello-nginx-html
+        - name: tmp
+          emptyDir: {}
+        - name: cache
+          emptyDir: {}
+        - name: run
+          emptyDir: {}

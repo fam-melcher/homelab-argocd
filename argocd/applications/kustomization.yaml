@@ -14,4 +14,3 @@ resources:
 labels:
   - pairs:
       managed-by: argocd
-
