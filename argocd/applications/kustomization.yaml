@@ -9,7 +9,9 @@ resources:
   - kairos-upgrades-application.yaml
   - metallb-application.yaml
   - metallb-config-appset.yaml
+  - hello-nginx-application.yaml
 
 labels:
   - pairs:
       managed-by: argocd
+

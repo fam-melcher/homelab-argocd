@@ -10,10 +10,10 @@ It is kept under `examples/` so it does not get deployed by the repo’s root Ar
 
 ## Deploy (via ArgoCD)
 
-This creates a dedicated ArgoCD `Application` that syncs the manifests in this folder.
+This is deployed by the repo’s ArgoCD app-of-apps via the `hello-nginx` Application.
 
 ```sh
-kubectl apply -f examples/hello-nginx/argocd-application.yaml
+kubectl -n argocd get application hello-nginx
 ```
 
 ## Verify
@@ -33,5 +33,5 @@ curl -H 'Host: hello.cloud.fam-melcher.net' http://$IP/
 ## Remove
 
 ```sh
-kubectl delete -f examples/hello-nginx/argocd-application.yaml
+kubectl -n argocd delete application hello-nginx
 ```
