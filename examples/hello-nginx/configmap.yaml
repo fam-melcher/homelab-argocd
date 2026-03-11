@@ -13,7 +13,7 @@ data:
         <title>Hello</title>
       </head>
       <body>
-        <h1>Hello from nginx</h1>
+        <h1>Hello from nginx!</h1>
         <p>Host: hello.cloud.fam-melcher.net</p>
       </body>
     </html>
